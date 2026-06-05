@@ -1,16 +1,11 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Bookmark, Trash2, Star } from "lucide-react";
 import { posterUrl } from "@/components/MediaCard";
 import { useAuth } from "@/lib/auth-context";
 import { useWatchlist } from "@/lib/user-data";
+import { Link } from "@/lib/navigation";
 
-export const Route = createFileRoute("/watchlist")({
-  head: () => ({ meta: [{ title: "Watchlist · Bingeverse" }] }),
-  component: WatchlistPage,
-});
-
-function WatchlistPage() {
+export function WatchlistPage() {
   const { user } = useAuth();
   const { items, remove } = useWatchlist();
   const [filter, setFilter] = useState<"all" | "movie" | "tv">("all");
@@ -31,7 +26,7 @@ function WatchlistPage() {
         <Bookmark className="size-12 mx-auto text-muted-foreground mb-4" />
         <h1 className="text-2xl font-extrabold mb-2">Login erforderlich</h1>
         <p className="text-muted-foreground mb-6">Logge dich ein, um deine Watchlist zu verwalten.</p>
-        <Link to="/auth" className="inline-flex h-11 px-6 items-center rounded-full bg-primary text-primary-foreground font-semibold">Zum Login</Link>
+        <Link href="/auth" className="inline-flex h-11 px-6 items-center rounded-full bg-primary text-primary-foreground font-semibold">Zum Login</Link>
       </div>
     );
   }
@@ -62,7 +57,7 @@ function WatchlistPage() {
       {filtered.length === 0 ? (
         <div className="py-20 text-center text-muted-foreground">
           <p>Noch nichts gespeichert.</p>
-          <Link to="/" className="inline-block mt-4 text-primary font-semibold hover:underline">Filme & Serien entdecken</Link>
+          <Link href="/" className="inline-block mt-4 text-primary font-semibold hover:underline">Filme & Serien entdecken</Link>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -71,13 +66,13 @@ function WatchlistPage() {
             const poster = posterUrl(it.poster_path, "w185");
             return (
               <div key={`${it.media_type}-${it.id}`} className="group flex gap-4 p-3 rounded-2xl bg-surface border border-border hover:border-primary/40 transition">
-                <Link to="/title/$type/$id" params={{ type: it.media_type, id: String(it.id) }} className="shrink-0">
+                <Link href={`/title/${it.media_type}/${it.id}`} className="shrink-0">
                   <div className="w-20 h-28 rounded-lg overflow-hidden bg-background">
                     {poster && <img src={poster} alt={it.title} className="size-full object-cover" />}
                   </div>
                 </Link>
                 <div className="flex-1 min-w-0">
-                  <Link to="/title/$type/$id" params={{ type: it.media_type, id: String(it.id) }} className="font-semibold line-clamp-2 hover:text-primary">
+                  <Link href={`/title/${it.media_type}/${it.id}`} className="font-semibold line-clamp-2 hover:text-primary">
                     {it.title}
                   </Link>
                   <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">

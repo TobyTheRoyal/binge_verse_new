@@ -1,29 +1,9 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { z } from "zod";
 import { Loader2 } from "lucide-react";
 import { MediaCard } from "@/components/MediaCard";
 import { getGenres, searchMulti, MediaItem, discover } from "@/lib/tmdb.functions";
-
-const searchSchema = z.object({
-  q: z.string().optional(),
-  type: z.enum(["movie", "tv"]).optional(),
-  genre: z.string().optional(),
-  year: z.string().optional(),
-  sort: z.string().optional(),
-});
-
-export const Route = createFileRoute("/browse")({
-  head: () => ({
-    meta: [
-      { title: "Browse · Bingeverse" },
-      { name: "description", content: "Suche und filtere Filme & Serien nach Genre, Jahr und mehr." },
-    ],
-  }),
-  validateSearch: searchSchema,
-  component: Browse,
-});
+import { useNavigate, useSearchParams } from "@/lib/navigation";
 
 const YEARS = Array.from({ length: 50 }, (_, i) => String(new Date().getFullYear() - i));
 const SORTS = [
@@ -33,61 +13,65 @@ const SORTS = [
   { v: "primary_release_date.asc", l: "Älteste" },
 ];
 
-function Browse() {
-  const navigate = useNavigate({ from: "/browse" });
-  const search = Route.useSearch();
-  const [text, setText] = useState(search.q ?? "");
+export function BrowsePage() {
+  const navigate = useNavigate();
+  const searchParams = useSearchParams();
+  const q = searchParams.get("q") ?? "";
+  const type = searchParams.get("type") === "tv" ? "tv" : "movie";
+  const genre = searchParams.get("genre") ?? undefined;
+  const year = searchParams.get("year") ?? undefined;
+  const sort = searchParams.get("sort") ?? undefined;
+  const [text, setText] = useState(q);
 
-  useEffect(() => setText(search.q ?? ""), [search.q]);
-
-  const mediaType: "movie" | "tv" = (search.type as any) ?? "movie";
+  useEffect(() => setText(q), [q]);
 
   const genresQ = useQuery({
-    queryKey: ["genres", mediaType],
-    queryFn: () => getGenres({ data: { media: mediaType } }),
+    queryKey: ["genres", type],
+    queryFn: () => getGenres({ data: { media: type } }),
     staleTime: 1000 * 60 * 60,
   });
 
-  const isSearch = !!search.q?.trim();
+  const isSearch = Boolean(q.trim());
 
   const resultsQ = useQuery({
-    queryKey: ["browse", search],
+    queryKey: ["browse", { q, type, genre, year, sort }],
     queryFn: async () => {
       if (isSearch) {
-        const r = await searchMulti({ data: { query: search.q! } });
-        return { results: r.results as MediaItem[] };
+        const result = await searchMulti({ data: { query: q } });
+        return { results: result.results as MediaItem[] };
       }
-      const r = await discover({
+
+      const result = await discover({
         data: {
-          media: mediaType,
-          genre: search.genre,
-          year: search.year,
-          sort_by: search.sort,
+          media: type,
+          genre,
+          year,
+          sort_by: sort,
         },
       });
-      return { results: r.results as MediaItem[] };
+      return { results: result.results as MediaItem[] };
     },
   });
 
   const update = (patch: Record<string, string | undefined>) => {
-    navigate({
-      search: (prev) => {
-        const next: any = { ...prev, ...patch };
-        Object.keys(next).forEach((k) => (next[k] === "" || next[k] === undefined) && delete next[k]);
-        return next;
-      },
-    });
+    const next = new URLSearchParams(searchParams);
+    for (const [key, value] of Object.entries(patch)) {
+      if (!value) next.delete(key);
+      else next.set(key, value);
+    }
+    const query = next.toString();
+    navigate(`/browse${query ? `?${query}` : ""}`);
   };
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
     update({ q: text.trim() || undefined });
   };
 
   const heading = useMemo(() => {
-    if (isSearch) return `Ergebnisse für "${search.q}"`;
-    return mediaType === "tv" ? "Serien durchstöbern" : "Filme durchstöbern";
-  }, [isSearch, mediaType, search.q]);
+    if (isSearch) return `Ergebnisse für "${q}"`;
+    return type === "tv" ? "Serien durchstöbern" : "Filme durchstöbern";
+  }, [isSearch, q, type]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-8">
@@ -98,8 +82,8 @@ function Browse() {
           <div className="flex flex-wrap gap-2">
             <input
               value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Suche…"
+              onChange={(event) => setText(event.target.value)}
+              placeholder="Suche..."
               className="flex-1 min-w-[200px] h-11 px-4 rounded-full bg-surface border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring text-sm"
             />
             <button type="submit" className="h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 transition">
@@ -115,25 +99,25 @@ function Browse() {
           {!isSearch && (
             <div className="flex flex-wrap gap-2">
               <div className="inline-flex p-1 rounded-full bg-surface border border-border">
-                <button type="button" onClick={() => update({ type: "movie", genre: undefined })} className={`px-4 h-9 rounded-full text-sm font-semibold transition ${mediaType === "movie" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                <button type="button" onClick={() => update({ type: "movie", genre: undefined })} className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "movie" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
                   Filme
                 </button>
-                <button type="button" onClick={() => update({ type: "tv", genre: undefined })} className={`px-4 h-9 rounded-full text-sm font-semibold transition ${mediaType === "tv" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                <button type="button" onClick={() => update({ type: "tv", genre: undefined })} className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "tv" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
                   Serien
                 </button>
               </div>
 
-              <select value={search.genre ?? ""} onChange={(e) => update({ genre: e.target.value || undefined })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
+              <select value={genre ?? ""} onChange={(event) => update({ genre: event.target.value || undefined })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
                 <option value="">Alle Genres</option>
                 {genresQ.data?.map((g) => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
               </select>
 
-              <select value={search.year ?? ""} onChange={(e) => update({ year: e.target.value || undefined })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
+              <select value={year ?? ""} onChange={(event) => update({ year: event.target.value || undefined })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
                 <option value="">Alle Jahre</option>
                 {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
               </select>
 
-              <select value={search.sort ?? "popularity.desc"} onChange={(e) => update({ sort: e.target.value })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
+              <select value={sort ?? "popularity.desc"} onChange={(event) => update({ sort: event.target.value })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
                 {SORTS.map((s) => <option key={s.v} value={s.v}>{s.l}</option>)}
               </select>
             </div>

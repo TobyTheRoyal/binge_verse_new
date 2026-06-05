@@ -1,6 +1,6 @@
-import { Link } from "@tanstack/react-router";
 import { Star } from "lucide-react";
 import type { MediaItem } from "@/lib/tmdb.functions";
+import { Link } from "@/lib/navigation";
 
 export const TMDB_IMG = "https://image.tmdb.org/t/p";
 
@@ -15,8 +15,7 @@ export function MediaCard({ item, priority }: { item: MediaItem; priority?: bool
 
   return (
     <Link
-      to="/title/$type/$id"
-      params={{ type: item.media_type, id: String(item.id) }}
+      href={`/title/${item.media_type}/${item.id}`}
       className="group block card-hover"
     >
       <div className="relative aspect-[2/3] rounded-xl overflow-hidden bg-surface border border-border">

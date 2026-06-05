@@ -1,53 +1,30 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { z } from "zod";
-import { Bookmark, BookmarkCheck, Star, Play, Calendar, Clock, Tv } from "lucide-react";
+import { Bookmark, BookmarkCheck, Star, Play, Calendar, Clock, Tv, Loader2 } from "lucide-react";
 import { TMDB_IMG, posterUrl, MediaCard } from "@/components/MediaCard";
 import { useAuth } from "@/lib/auth-context";
 import { getDetails } from "@/lib/tmdb.functions";
 import { useWatchlist, useRatings } from "@/lib/user-data";
+import { Link } from "@/lib/navigation";
 
-const paramsSchema = z.object({
-  type: z.enum(["movie", "tv"]),
-  id: z.string(),
-});
-
-const detailsQuery = (media: "movie" | "tv", id: number) =>
-  queryOptions({
-    queryKey: ["details", media, id],
-    queryFn: () => getDetails({ data: { media, id } }),
-    staleTime: 1000 * 60 * 30,
-  });
-
-export const Route = createFileRoute("/title/$type/$id")({
-  parseParams: (raw) => paramsSchema.parse(raw),
-  head: ({ loaderData }) => ({
-    meta: loaderData
-      ? [
-          { title: `${loaderData.title} · Bingeverse` },
-          { name: "description", content: loaderData.overview.slice(0, 160) },
-          { property: "og:title", content: loaderData.title },
-          { property: "og:description", content: loaderData.overview.slice(0, 160) },
-          ...(loaderData.backdrop_path ? [{ property: "og:image", content: `${TMDB_IMG}/w1280${loaderData.backdrop_path}` }] : []),
-        ]
-      : [{ title: "Bingeverse" }],
-  }),
-  loader: async ({ context, params }) => {
-    const id = Number(params.id);
-    if (!id) throw notFound();
-    return context.queryClient.ensureQueryData(detailsQuery(params.type, id));
-  },
-  component: Detail,
-});
-
-function Detail() {
-  const params = Route.useParams();
-  const { data: d } = useSuspenseQuery(detailsQuery(params.type, Number(params.id)));
+export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number }) {
   const { user } = useAuth();
   const { inList, toggle } = useWatchlist();
   const { getRating, setRating, removeRating } = useRatings();
   const [hover, setHover] = useState(0);
+  const { data: d, isLoading, error } = useQuery({
+    queryKey: ["details", media, id, user?.id],
+    queryFn: () => getDetails({ data: { media, id, userId: user?.id } }),
+    staleTime: 1000 * 60 * 30,
+  });
+
+  if (isLoading) {
+    return <div className="py-24 grid place-items-center text-muted-foreground"><Loader2 className="animate-spin" /></div>;
+  }
+
+  if (error || !d) {
+    return <div className="py-24 text-center text-muted-foreground">Dieser Titel konnte nicht geladen werden.</div>;
+  }
 
   const saved = inList(d.id, d.media_type);
   const myRating = getRating(d.id, d.media_type);
@@ -158,7 +135,7 @@ function Detail() {
                     {saved ? "In Watchlist" : "Zur Watchlist"}
                   </button>
                 ) : (
-                  <Link to="/auth" className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-surface border border-border font-semibold hover:bg-surface-2">
+                  <Link href="/auth" className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-surface border border-border font-semibold hover:bg-surface-2">
                     <Bookmark className="size-4" /> Login zum Speichern
                   </Link>
                 )}

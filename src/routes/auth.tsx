@@ -1,14 +1,9 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Film, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { Link, useNavigate } from "@/lib/navigation";
 
-export const Route = createFileRoute("/auth")({
-  head: () => ({ meta: [{ title: "Login · Bingeverse" }] }),
-  component: AuthPage,
-});
-
-function AuthPage() {
+export function AuthPage() {
   const { signIn, signUp, user } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -18,19 +13,18 @@ function AuthPage() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  if (user) {
-    navigate({ to: "/" });
-    return null;
-  }
+  useEffect(() => {
+    if (user) navigate("/", { replace: true });
+  }, [navigate, user]);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setErr(null);
     setLoading(true);
-    const res = mode === "login" ? await signIn(email, password) : await signUp(name, email, password);
+    const result = mode === "login" ? await signIn(email, password) : await signUp(name, email, password);
     setLoading(false);
-    if (res.error) setErr(res.error);
-    else navigate({ to: "/" });
+    if (result.error) setErr(result.error);
+    else navigate("/");
   };
 
   return (
@@ -52,16 +46,16 @@ function AuthPage() {
           {mode === "signup" && (
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
+              <input value={name} onChange={(event) => setName(event.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
             </div>
           )}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">E-Mail</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
+            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Passwort</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
           </div>
 
           {err && <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">{err}</div>}
@@ -80,7 +74,7 @@ function AuthPage() {
         </form>
 
         <p className="text-center text-xs text-muted-foreground mt-6">
-          <Link to="/" className="hover:text-foreground">← zurück zur Startseite</Link>
+          <Link href="/" className="hover:text-foreground">Zurück zur Startseite</Link>
         </p>
       </div>
     </div>

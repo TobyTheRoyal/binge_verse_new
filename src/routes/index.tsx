@@ -1,30 +1,25 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
-import { Play, Info, Star } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Play, Info, Star, Loader2 } from "lucide-react";
 import { TMDB_IMG } from "@/components/MediaCard";
 import { MediaRow } from "@/components/MediaRow";
 import { RecommendedRow } from "@/components/RecommendedRow";
 import { getHomeData } from "@/lib/home.functions";
+import { Link } from "@/lib/navigation";
 
-const homeQuery = queryOptions({
-  queryKey: ["home"],
-  queryFn: () => getHomeData(),
-  staleTime: 1000 * 60 * 10,
-});
+export function HomePage() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["home"],
+    queryFn: getHomeData,
+  });
 
-export const Route = createFileRoute("/")({
-  head: () => ({
-    meta: [
-      { title: "Bingeverse — Discover" },
-      { name: "description", content: "Entdecke Trends, Top-Bewertungen und persönliche Empfehlungen." },
-    ],
-  }),
-  loader: ({ context }) => context.queryClient.ensureQueryData(homeQuery),
-  component: Home,
-});
+  if (isLoading) {
+    return <div className="py-24 grid place-items-center text-muted-foreground"><Loader2 className="animate-spin" /></div>;
+  }
 
-function Home() {
-  const { data } = useSuspenseQuery(homeQuery);
+  if (error || !data) {
+    return <div className="py-24 text-center text-muted-foreground">Die Startdaten konnten nicht geladen werden.</div>;
+  }
+
   const f = data.featured;
 
   return (
@@ -62,15 +57,14 @@ function Home() {
               <p className="text-base md:text-lg text-foreground/80 line-clamp-3 max-w-xl">{f.overview}</p>
               <div className="flex flex-wrap gap-3 pt-2">
                 <Link
-                  to="/title/$type/$id"
-                  params={{ type: f.media_type, id: String(f.id) }}
+                  href={`/title/${f.media_type}/${f.id}`}
                   className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-primary/30"
                 >
                   <Play className="size-4 fill-current" />
                   Details ansehen
                 </Link>
                 <Link
-                  to="/browse"
+                  href="/browse"
                   className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-surface border border-border font-semibold hover:bg-surface-2 transition-colors"
                 >
                   <Info className="size-4" />

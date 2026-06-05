@@ -1,22 +1,28 @@
-import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { Link, useNavigate, useNavigation } from "@/lib/navigation";
 import { Search, LogOut, User as UserIcon, Film } from "lucide-react";
 
 export function Navbar() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useNavigation();
   const [q, setQ] = useState("");
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (q.trim()) navigate({ to: "/browse", search: { q: q.trim() } as any });
+    if (q.trim()) navigate(`/browse?q=${encodeURIComponent(q.trim())}`);
   };
+
+  const navClass = (href: string) =>
+    `px-3 py-2 rounded-md transition-colors ${
+      pathname === href ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+    }`;
 
   return (
     <header className="sticky top-0 z-40 glass border-b border-border">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 h-16 flex items-center gap-4">
-        <Link to="/" className="flex items-center gap-2 shrink-0 group">
+        <Link href="/" className="flex items-center gap-2 shrink-0 group">
           <div className="size-8 rounded-lg bg-gradient-to-br from-primary to-accent grid place-items-center shadow-lg shadow-primary/30">
             <Film className="size-4 text-primary-foreground" strokeWidth={2.5} />
           </div>
@@ -24,18 +30,18 @@ export function Navbar() {
         </Link>
 
         <nav className="hidden md:flex items-center gap-1 text-sm font-medium ml-2">
-          <Link to="/" activeOptions={{ exact: true }} className="px-3 py-2 rounded-md text-muted-foreground hover:text-foreground transition-colors" activeProps={{ className: "px-3 py-2 rounded-md text-foreground" }}>
+          <Link href="/" className={navClass("/")}>
             Discover
           </Link>
-          <Link to="/browse" className="px-3 py-2 rounded-md text-muted-foreground hover:text-foreground transition-colors" activeProps={{ className: "px-3 py-2 rounded-md text-foreground" }}>
+          <Link href="/browse" className={navClass("/browse")}>
             Browse
           </Link>
           {user && (
             <>
-              <Link to="/watchlist" className="px-3 py-2 rounded-md text-muted-foreground hover:text-foreground transition-colors" activeProps={{ className: "px-3 py-2 rounded-md text-foreground" }}>
+              <Link href="/watchlist" className={navClass("/watchlist")}>
                 Watchlist
               </Link>
-              <Link to="/history" className="px-3 py-2 rounded-md text-muted-foreground hover:text-foreground transition-colors" activeProps={{ className: "px-3 py-2 rounded-md text-foreground" }}>
+              <Link href="/history" className={navClass("/history")}>
                 History
               </Link>
             </>
@@ -68,7 +74,7 @@ export function Navbar() {
               </button>
             </>
           ) : (
-            <Link to="/auth" className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity">
+            <Link href="/auth" className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity">
               <UserIcon className="size-4" />
               Login
             </Link>

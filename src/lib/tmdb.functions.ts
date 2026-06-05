@@ -1,22 +1,7 @@
-import { createServerFn } from "@tanstack/react-start";
-
-const TMDB_BASE = "https://api.themoviedb.org/3";
-
-async function tmdb<T = any>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
-  const key = process.env.TMDB_API_KEY;
-  if (!key) throw new Error("TMDB_API_KEY missing");
-  const url = new URL(TMDB_BASE + path);
-  url.searchParams.set("api_key", key);
-  url.searchParams.set("language", "en-US");
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
-  }
-  const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`TMDB ${res.status}: ${path}`);
-  return res.json();
-}
+import { graphqlClient } from "./graphql";
 
 export type Media = "movie" | "tv";
+
 export interface MediaItem {
   id: number;
   media_type: Media;
@@ -30,153 +15,241 @@ export interface MediaItem {
   genre_ids: number[];
 }
 
-function normalize(raw: any, fallbackMedia?: Media): MediaItem {
-  const mt: Media = (raw.media_type ?? fallbackMedia ?? (raw.title ? "movie" : "tv")) as Media;
+export interface MediaDetails extends MediaItem {
+  tagline: string;
+  runtime: number | null;
+  number_of_seasons: number | null;
+  number_of_episodes: number | null;
+  genres: { id: number; name: string }[];
+  imdb_rating: string | null;
+  rt_rating: string | null;
+  imdb_id: string | null;
+  cast: { id: number; name: string; character: string | null; profile_path: string | null }[];
+  recommendations: MediaItem[];
+  watchProviders: {
+    link: string | null;
+    region: string;
+    flatrate: Provider[];
+    rent: Provider[];
+    buy: Provider[];
+  } | null;
+  trailerKey: string | null;
+  myRating: number | null;
+  inWatchlist: boolean;
+}
+
+type Provider = {
+  provider_id: number;
+  provider_name: string;
+  logo_path: string | null;
+};
+
+const MEDIA_FIELDS = `
+  id
+  mediaType
+  title
+  posterPath
+  backdropPath
+  overview
+  releaseDate
+  voteAverage
+  voteCount
+  genreIds
+`;
+
+function fromMedia(raw: any): MediaItem {
   return {
     id: raw.id,
-    media_type: mt,
-    title: raw.title ?? raw.name ?? "Untitled",
-    poster_path: raw.poster_path ?? null,
-    backdrop_path: raw.backdrop_path ?? null,
-    overview: raw.overview ?? "",
-    release_date: raw.release_date ?? raw.first_air_date ?? null,
-    vote_average: raw.vote_average ?? 0,
-    vote_count: raw.vote_count ?? 0,
-    genre_ids: raw.genre_ids ?? [],
+    media_type: raw.mediaType,
+    title: raw.title,
+    poster_path: raw.posterPath,
+    backdrop_path: raw.backdropPath,
+    overview: raw.overview,
+    release_date: raw.releaseDate,
+    vote_average: raw.voteAverage,
+    vote_count: raw.voteCount,
+    genre_ids: raw.genreIds,
   };
 }
 
-export const getTrending = createServerFn({ method: "GET" })
-  .inputValidator((d: { media?: "all" | Media; window?: "day" | "week" }) => d)
-  .handler(async ({ data }) => {
-    const r = await tmdb<any>(`/trending/${data.media ?? "all"}/${data.window ?? "week"}`);
-    return (r.results ?? []).map((x: any) => normalize(x)).filter((x: MediaItem) => x.poster_path);
-  });
+function fromProvider(raw: any): Provider {
+  return {
+    provider_id: raw.providerId,
+    provider_name: raw.providerName,
+    logo_path: raw.logoPath,
+  };
+}
 
-export const getList = createServerFn({ method: "GET" })
-  .inputValidator((d: { media: Media; list: string; page?: number }) => d)
-  .handler(async ({ data }) => {
-    const r = await tmdb<any>(`/${data.media}/${data.list}`, { page: data.page ?? 1 });
-    return (r.results ?? []).map((x: any) => normalize(x, data.media)).filter((x: MediaItem) => x.poster_path);
-  });
-
-export const searchMulti = createServerFn({ method: "GET" })
-  .inputValidator((d: { query: string; page?: number }) => d)
-  .handler(async ({ data }) => {
-    if (!data.query.trim()) return { results: [] as MediaItem[], total: 0 };
-    const r = await tmdb<any>(`/search/multi`, { query: data.query, page: data.page ?? 1, include_adult: "false" });
-    const results = (r.results ?? [])
-      .filter((x: any) => x.media_type === "movie" || x.media_type === "tv")
-      .map((x: any) => normalize(x))
-      .filter((x: MediaItem) => x.poster_path);
-    return { results, total: r.total_results ?? results.length };
-  });
-
-export const discover = createServerFn({ method: "GET" })
-  .inputValidator((d: { media: Media; genre?: string; year?: string; sort_by?: string; page?: number }) => d)
-  .handler(async ({ data }) => {
-    const params: Record<string, string | number> = {
-      sort_by: data.sort_by || "popularity.desc",
-      page: data.page ?? 1,
-      include_adult: "false",
-    };
-    if (data.genre) params.with_genres = data.genre;
-    if (data.year) {
-      if (data.media === "movie") params.primary_release_year = data.year;
-      else params.first_air_date_year = data.year;
-    }
-    const r = await tmdb<any>(`/discover/${data.media}`, params);
-    return {
-      results: (r.results ?? []).map((x: any) => normalize(x, data.media)).filter((x: MediaItem) => x.poster_path),
-      total_pages: r.total_pages ?? 1,
-      page: r.page ?? 1,
-    };
-  });
-
-export const getGenres = createServerFn({ method: "GET" })
-  .inputValidator((d: { media: Media }) => d)
-  .handler(async ({ data }) => {
-    const r = await tmdb<any>(`/genre/${data.media}/list`);
-    return (r.genres ?? []) as { id: number; name: string }[];
-  });
-
-export const getDetails = createServerFn({ method: "GET" })
-  .inputValidator((d: { media: Media; id: number }) => d)
-  .handler(async ({ data }) => {
-    const r = await tmdb<any>(`/${data.media}/${data.id}`, {
-      append_to_response: "credits,recommendations,videos,watch/providers,external_ids",
-    });
-
-    // OMDb for IMDB + Rotten Tomatoes ratings
-    let imdb_rating: string | null = null;
-    let rt_rating: string | null = null;
-    const imdbId: string | undefined = r.external_ids?.imdb_id || r.imdb_id;
-    const omdbKey = process.env.OMDB_API_KEY;
-    if (imdbId && omdbKey) {
-      try {
-        const o = await fetch(`https://www.omdbapi.com/?i=${imdbId}&apikey=${omdbKey}`).then((x) => x.json());
-        if (o?.imdbRating && o.imdbRating !== "N/A") imdb_rating = o.imdbRating;
-        const rt = (o?.Ratings ?? []).find((x: any) => x.Source === "Rotten Tomatoes");
-        if (rt?.Value) rt_rating = rt.Value;
-      } catch {}
-    }
-
-    const cast = (r.credits?.cast ?? []).slice(0, 12).map((c: any) => ({
-      id: c.id,
-      name: c.name,
-      character: c.character,
-      profile_path: c.profile_path,
-    }));
-
-    const providers = r["watch/providers"]?.results ?? {};
-    // Pick a sensible default region: US, then DE, then first available
-    const regionKey = providers.US ? "US" : providers.DE ? "DE" : Object.keys(providers)[0];
-    const region = regionKey ? providers[regionKey] : null;
-    const watchProviders = region
+function fromDetails(raw: any): MediaDetails {
+  return {
+    ...fromMedia(raw),
+    tagline: raw.tagline ?? "",
+    runtime: raw.runtime,
+    number_of_seasons: raw.numberOfSeasons,
+    number_of_episodes: raw.numberOfEpisodes,
+    genres: raw.genres ?? [],
+    imdb_rating: raw.imdbRating,
+    rt_rating: raw.rottenTomatoesRating,
+    imdb_id: raw.imdbId,
+    cast: (raw.cast ?? []).map((member: any) => ({
+      id: member.id,
+      name: member.name,
+      character: member.character,
+      profile_path: member.profilePath,
+    })),
+    recommendations: (raw.recommendations ?? []).map(fromMedia),
+    watchProviders: raw.watchProviders
       ? {
-          link: region.link as string | undefined,
-          flatrate: (region.flatrate ?? []) as any[],
-          rent: (region.rent ?? []) as any[],
-          buy: (region.buy ?? []) as any[],
-          region: regionKey as string,
+          link: raw.watchProviders.link,
+          region: raw.watchProviders.region,
+          flatrate: raw.watchProviders.flatrate.map(fromProvider),
+          rent: raw.watchProviders.rent.map(fromProvider),
+          buy: raw.watchProviders.buy.map(fromProvider),
         }
-      : null;
+      : null,
+    trailerKey: raw.trailerKey,
+    myRating: raw.myRating,
+    inWatchlist: raw.inWatchlist,
+  };
+}
 
-    const trailer = (r.videos?.results ?? []).find(
-      (v: any) => v.site === "YouTube" && (v.type === "Trailer" || v.type === "Teaser"),
-    );
+export async function getHomeData() {
+  const data = await graphqlClient.request<any>(`
+    query Home {
+      home {
+        featured { ${MEDIA_FIELDS} }
+        trending { ${MEDIA_FIELDS} }
+        trendingMovies { ${MEDIA_FIELDS} }
+        trendingTv { ${MEDIA_FIELDS} }
+        popularMovies { ${MEDIA_FIELDS} }
+        popularTv { ${MEDIA_FIELDS} }
+        topMovies { ${MEDIA_FIELDS} }
+        topTv { ${MEDIA_FIELDS} }
+      }
+    }
+  `);
 
-    return {
-      id: r.id as number,
-      media_type: data.media,
-      title: (r.title ?? r.name) as string,
-      tagline: (r.tagline ?? "") as string,
-      overview: (r.overview ?? "") as string,
-      poster_path: r.poster_path as string | null,
-      backdrop_path: r.backdrop_path as string | null,
-      release_date: (r.release_date ?? r.first_air_date ?? null) as string | null,
-      runtime: (r.runtime ?? r.episode_run_time?.[0] ?? null) as number | null,
-      number_of_seasons: (r.number_of_seasons ?? null) as number | null,
-      number_of_episodes: (r.number_of_episodes ?? null) as number | null,
-      genres: ((r.genres ?? []) as { id: number; name: string }[]),
-      vote_average: r.vote_average as number,
-      vote_count: r.vote_count as number,
-      imdb_rating,
-      rt_rating,
-      imdb_id: imdbId ?? null,
-      cast,
-      recommendations: ((r.recommendations?.results ?? []) as any[])
-        .map((x) => normalize(x, data.media))
-        .filter((x) => x.poster_path)
-        .slice(0, 20),
-      watchProviders,
-      trailerKey: trailer?.key ?? null,
-    };
-  });
+  return {
+    featured: data.home.featured ? fromMedia(data.home.featured) : null,
+    trending: data.home.trending.map(fromMedia),
+    trendingMovies: data.home.trendingMovies.map(fromMedia),
+    trendingTv: data.home.trendingTv.map(fromMedia),
+    popularMovies: data.home.popularMovies.map(fromMedia),
+    popularTv: data.home.popularTv.map(fromMedia),
+    topMovies: data.home.topMovies.map(fromMedia),
+    topTv: data.home.topTv.map(fromMedia),
+  };
+}
 
-export const getRecommendationsFor = createServerFn({ method: "GET" })
-  .inputValidator((d: { media: Media; id: number }) => d)
-  .handler(async ({ data }) => {
-    const r = await tmdb<any>(`/${data.media}/${data.id}/recommendations`);
-    return (r.results ?? []).map((x: any) => normalize(x, data.media)).filter((x: MediaItem) => x.poster_path);
-  });
+export async function searchMulti({ data }: { data: { query: string; page?: number } }) {
+  const result = await graphqlClient.request<any>(
+    `
+      query Search($query: String!, $page: Int) {
+        search(query: $query, page: $page) { ${MEDIA_FIELDS} }
+      }
+    `,
+    data,
+  );
+
+  return { results: result.search.map(fromMedia), total: result.search.length };
+}
+
+export async function discover({
+  data,
+}: {
+  data: { media: Media; genre?: string; year?: string; sort_by?: string; page?: number };
+}) {
+  const result = await graphqlClient.request<any>(
+    `
+      query Discover($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int) {
+        discover(media: $media, genre: $genre, year: $year, sort: $sort, page: $page) { ${MEDIA_FIELDS} }
+      }
+    `,
+    {
+      media: data.media,
+      genre: data.genre,
+      year: data.year,
+      sort: data.sort_by,
+      page: data.page,
+    },
+  );
+
+  return { results: result.discover.map(fromMedia), total_pages: 1, page: data.page ?? 1 };
+}
+
+export async function getGenres({ data }: { data: { media: Media } }) {
+  const result = await graphqlClient.request<any>(
+    `
+      query Genres($media: MediaType!) {
+        genres(media: $media) {
+          id
+          name
+        }
+      }
+    `,
+    data,
+  );
+
+  return result.genres as { id: number; name: string }[];
+}
+
+export async function getDetails({ data }: { data: { media: Media; id: number; userId?: string } }) {
+  const result = await graphqlClient.request<any>(
+    `
+      query Details($media: MediaType!, $id: Int!, $userId: String) {
+        details(media: $media, id: $id, userId: $userId) {
+          id
+          mediaType
+          title
+          posterPath
+          backdropPath
+          overview
+          releaseDate
+          voteAverage
+          voteCount
+          tagline
+          runtime
+          numberOfSeasons
+          numberOfEpisodes
+          genres { id name }
+          imdbRating
+          rottenTomatoesRating
+          imdbId
+          cast {
+            id
+            name
+            character
+            profilePath
+          }
+          recommendations { ${MEDIA_FIELDS} }
+          watchProviders {
+            link
+            region
+            flatrate { providerId providerName logoPath }
+            rent { providerId providerName logoPath }
+            buy { providerId providerName logoPath }
+          }
+          trailerKey
+          myRating
+          inWatchlist
+        }
+      }
+    `,
+    data,
+  );
+
+  return fromDetails(result.details);
+}
+
+export async function getRecommendationsFor({ data }: { data: { media: Media; id: number } }) {
+  const result = await graphqlClient.request<any>(
+    `
+      query Recommendations($media: MediaType!, $id: Int!) {
+        recommendations(media: $media, id: $id) { ${MEDIA_FIELDS} }
+      }
+    `,
+    data,
+  );
+
+  return result.recommendations.map(fromMedia) as MediaItem[];
+}

@@ -1,16 +1,11 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { History as HistoryIcon, Star, Trash2 } from "lucide-react";
 import { posterUrl } from "@/components/MediaCard";
 import { useAuth } from "@/lib/auth-context";
 import { useRatings } from "@/lib/user-data";
+import { Link } from "@/lib/navigation";
 
-export const Route = createFileRoute("/history")({
-  head: () => ({ meta: [{ title: "History · Bingeverse" }] }),
-  component: HistoryPage,
-});
-
-function HistoryPage() {
+export function HistoryPage() {
   const { user } = useAuth();
   const { items, removeRating } = useRatings();
   const [filter, setFilter] = useState<"all" | "movie" | "tv">("all");
@@ -34,7 +29,7 @@ function HistoryPage() {
         <HistoryIcon className="size-12 mx-auto text-muted-foreground mb-4" />
         <h1 className="text-2xl font-extrabold mb-2">Login erforderlich</h1>
         <p className="text-muted-foreground mb-6">Deine Bewertungs-Historie erscheint hier nach dem Login.</p>
-        <Link to="/auth" className="inline-flex h-11 px-6 items-center rounded-full bg-primary text-primary-foreground font-semibold">Zum Login</Link>
+        <Link href="/auth" className="inline-flex h-11 px-6 items-center rounded-full bg-primary text-primary-foreground font-semibold">Zum Login</Link>
       </div>
     );
   }
@@ -83,13 +78,13 @@ function HistoryPage() {
             const poster = posterUrl(it.poster_path, "w185");
             return (
               <div key={`${it.media_type}-${it.id}`} className="group flex gap-4 p-3 rounded-2xl bg-surface border border-border hover:border-primary/40 transition">
-                <Link to="/title/$type/$id" params={{ type: it.media_type, id: String(it.id) }} className="shrink-0">
+                <Link href={`/title/${it.media_type}/${it.id}`} className="shrink-0">
                   <div className="w-20 h-28 rounded-lg overflow-hidden bg-background">
                     {poster && <img src={poster} alt={it.title} className="size-full object-cover" />}
                   </div>
                 </Link>
                 <div className="flex-1 min-w-0">
-                  <Link to="/title/$type/$id" params={{ type: it.media_type, id: String(it.id) }} className="font-semibold line-clamp-2 hover:text-primary">
+                  <Link href={`/title/${it.media_type}/${it.id}`} className="font-semibold line-clamp-2 hover:text-primary">
                     {it.title}
                   </Link>
                   <div className="text-xs text-muted-foreground mt-1">
