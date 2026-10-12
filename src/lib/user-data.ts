@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useAuth } from "./auth-context";
 import { graphqlClient } from "./graphql";
+import type { EpisodeInfo } from "./tmdb.functions";
 
 export type Media = "movie" | "tv";
 
@@ -21,6 +22,17 @@ export interface RatingEntry extends SavedItem {
   ratedAt: number;
 }
 
+export type WatchStatus = "PLAN_TO_WATCH" | "WATCHING" | "COMPLETED" | "ON_HOLD" | "DROPPED";
+
+export interface WatchProgress extends SavedItem {
+  status: WatchStatus;
+  totalEpisodes: number;
+  watchedEpisodes: number;
+  watchedAt: number | null;
+  lastActivityAt: number;
+  nextEpisode: EpisodeInfo | null;
+}
+
 const savedFields = `
   tmdbId
   mediaType
@@ -36,6 +48,34 @@ const ratingFields = `
   seasonNumber
   rating
   ratedAt
+`;
+
+const episodeFields = `
+  seasonNumber
+  episodeNumber
+  name
+  overview
+  airDate
+  runtime
+  stillPath
+  voteAverage
+  watched
+  watchedAt
+`;
+
+const progressFields = `
+  tmdbId
+  mediaType
+  title
+  posterPath
+  releaseDate
+  voteAverage
+  status
+  totalEpisodes
+  watchedEpisodes
+  watchedAt
+  lastActivityAt
+  nextEpisode { ${episodeFields} }
 `;
 
 function fromSaved(raw: any): SavedItem {
@@ -67,6 +107,44 @@ function toRatingInput(userId: string, item: Omit<RatingEntry, "ratedAt" | "adde
     ...toInput(userId, item),
     seasonNumber: item.seasonNumber ?? null,
     rating: item.rating,
+  };
+}
+
+function fromEpisode(raw: any): EpisodeInfo {
+  return {
+    season_number: raw.seasonNumber,
+    episode_number: raw.episodeNumber,
+    name: raw.name,
+    overview: raw.overview,
+    air_date: raw.airDate,
+    runtime: raw.runtime,
+    still_path: raw.stillPath,
+    vote_average: raw.voteAverage ?? 0,
+    watched: Boolean(raw.watched),
+    watchedAt: raw.watchedAt ?? null,
+  };
+}
+
+function fromProgress(raw: any): WatchProgress {
+  return {
+    ...fromSaved(raw),
+    status: raw.status,
+    totalEpisodes: raw.totalEpisodes ?? 0,
+    watchedEpisodes: raw.watchedEpisodes ?? 0,
+    watchedAt: raw.watchedAt ?? null,
+    lastActivityAt: raw.lastActivityAt,
+    nextEpisode: raw.nextEpisode ? fromEpisode(raw.nextEpisode) : null,
+  };
+}
+
+function toProgressInput(
+  userId: string,
+  item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
+) {
+  return {
+    ...toInput(userId, item),
+    status: item.status,
+    totalEpisodes: item.totalEpisodes ?? 0,
   };
 }
 
@@ -120,7 +198,8 @@ export function useWatchlist() {
   });
 
   const items = useMemo(() => query.data ?? [], [query.data]);
-  const inList = (id: number, media_type: Media) => items.some((item) => item.id === id && item.media_type === media_type);
+  const inList = (id: number, media_type: Media) =>
+    items.some((item) => item.id === id && item.media_type === media_type);
 
   const add = (item: Omit<SavedItem, "addedAt">) => {
     if (!user) return false;
@@ -182,7 +261,11 @@ export function useRatings() {
   });
 
   const removeMutation = useMutation({
-    mutationFn: async ({ id, media_type, seasonNumber }: Pick<RatingEntry, "id" | "media_type"> & { seasonNumber?: number | null }) => {
+    mutationFn: async ({
+      id,
+      media_type,
+      seasonNumber,
+    }: Pick<RatingEntry, "id" | "media_type"> & { seasonNumber?: number | null }) => {
       await graphqlClient.request(
         `
           mutation RemoveRating($userId: String!, $tmdbId: Int!, $mediaType: MediaType!, $seasonNumber: Int) {
@@ -197,10 +280,11 @@ export function useRatings() {
 
   const items = useMemo(() => query.data ?? [], [query.data]);
   const getRating = (id: number, media_type: Media, seasonNumber?: number | null) =>
-    items.find((entry) =>
-      entry.id === id &&
-      entry.media_type === media_type &&
-      (seasonNumber == null ? entry.seasonNumber == null : entry.seasonNumber === seasonNumber),
+    items.find(
+      (entry) =>
+        entry.id === id &&
+        entry.media_type === media_type &&
+        (seasonNumber == null ? entry.seasonNumber == null : entry.seasonNumber === seasonNumber),
     )?.rating ?? 0;
 
   const setRating = (item: Omit<RatingEntry, "ratedAt" | "addedAt">) => {
@@ -215,4 +299,249 @@ export function useRatings() {
   };
 
   return { items, getRating, setRating, removeRating, loading: query.isLoading };
+}
+
+export function useWatchProgress(id?: number, media_type?: Media) {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const queryKey = ["watch-progress", user?.id, media_type, id];
+
+  const query = useQuery({
+    queryKey,
+    enabled: Boolean(user && id && media_type),
+    queryFn: async () => {
+      const data = await graphqlClient.request<any>(
+        `
+          query WatchProgress($userId: String!, $tmdbId: Int!, $mediaType: MediaType!) {
+            watchProgress(userId: $userId, tmdbId: $tmdbId, mediaType: $mediaType) { ${progressFields} }
+          }
+        `,
+        { userId: user!.id, tmdbId: id, mediaType: media_type },
+      );
+      return data.watchProgress ? fromProgress(data.watchProgress) : null;
+    },
+  });
+
+  const invalidateProgress = () => {
+    queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["season-details"] });
+  };
+
+  const setStatusMutation = useMutation({
+    mutationFn: async (
+      item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
+    ) => {
+      const data = await graphqlClient.request<any>(
+        `
+          mutation SetWatchStatus($input: WatchProgressInput!) {
+            setWatchStatus(input: $input) { ${progressFields} }
+          }
+        `,
+        { input: toProgressInput(user!.id, item) },
+      );
+      return fromProgress(data.setWatchStatus);
+    },
+    onSuccess: invalidateProgress,
+  });
+
+  const setEpisodeMutation = useMutation({
+    mutationFn: async ({
+      item,
+      episode,
+      watched,
+      totalEpisodes,
+    }: {
+      item: Omit<SavedItem, "addedAt">;
+      episode: EpisodeInfo;
+      watched: boolean;
+      totalEpisodes?: number;
+    }) => {
+      const data = await graphqlClient.request<any>(
+        `
+          mutation SetEpisodeWatched($input: EpisodeProgressInput!) {
+            setEpisodeWatched(input: $input) { ${progressFields} }
+          }
+        `,
+        {
+          input: {
+            ...toInput(user!.id, item),
+            totalEpisodes: totalEpisodes ?? 0,
+            seasonNumber: episode.season_number,
+            episodeNumber: episode.episode_number,
+            episodeTitle: episode.name,
+            airDate: episode.air_date,
+            runtime: episode.runtime,
+            stillPath: episode.still_path,
+            watched,
+          },
+        },
+      );
+      return fromProgress(data.setEpisodeWatched);
+    },
+    onSuccess: invalidateProgress,
+  });
+
+  const setSeasonMutation = useMutation({
+    mutationFn: async ({
+      item,
+      seasonNumber,
+      episodes,
+      watched,
+      totalEpisodes,
+    }: {
+      item: Omit<SavedItem, "addedAt">;
+      seasonNumber: number;
+      episodes: EpisodeInfo[];
+      watched: boolean;
+      totalEpisodes?: number;
+    }) => {
+      const data = await graphqlClient.request<any>(
+        `
+          mutation SetSeasonWatched($input: SeasonProgressInput!) {
+            setSeasonWatched(input: $input) { ${progressFields} }
+          }
+        `,
+        {
+          input: {
+            ...toInput(user!.id, item),
+            totalEpisodes: totalEpisodes ?? 0,
+            seasonNumber,
+            watched,
+            episodes: episodes.map((episode) => ({
+              episodeNumber: episode.episode_number,
+              episodeTitle: episode.name,
+              airDate: episode.air_date,
+              runtime: episode.runtime,
+              stillPath: episode.still_path,
+            })),
+          },
+        },
+      );
+      return fromProgress(data.setSeasonWatched);
+    },
+    onSuccess: invalidateProgress,
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async () => {
+      await graphqlClient.request(
+        `
+          mutation RemoveWatchProgress($userId: String!, $tmdbId: Int!, $mediaType: MediaType!) {
+            removeWatchProgress(userId: $userId, tmdbId: $tmdbId, mediaType: $mediaType)
+          }
+        `,
+        { userId: user!.id, tmdbId: id, mediaType: media_type },
+      );
+    },
+    onSuccess: invalidateProgress,
+  });
+
+  return {
+    progress: query.data ?? null,
+    loading: query.isLoading,
+    setStatus: setStatusMutation.mutate,
+    setEpisodeWatched: setEpisodeMutation.mutate,
+    setSeasonWatched: setSeasonMutation.mutate,
+    removeProgress: removeMutation.mutate,
+    updating:
+      setStatusMutation.isPending ||
+      setEpisodeMutation.isPending ||
+      setSeasonMutation.isPending ||
+      removeMutation.isPending,
+  };
+}
+
+export function useWatchProgressList() {
+  const { user } = useAuth();
+  const queryKey = ["watch-progress-list", user?.id];
+
+  const query = useQuery({
+    queryKey,
+    enabled: Boolean(user),
+    queryFn: async () => {
+      const data = await graphqlClient.request<any>(
+        `
+          query WatchProgressList($userId: String!) {
+            watchProgressList(userId: $userId) { ${progressFields} }
+          }
+        `,
+        { userId: user!.id },
+      );
+      return data.watchProgressList.map(fromProgress) as WatchProgress[];
+    },
+  });
+
+  return { items: query.data ?? [], loading: query.isLoading };
+}
+
+export function useWatchProgressActions() {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  const invalidateProgress = () => {
+    queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
+  };
+
+  const setStatusMutation = useMutation({
+    mutationFn: async (
+      item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
+    ) => {
+      const data = await graphqlClient.request<any>(
+        `
+          mutation SetWatchStatus($input: WatchProgressInput!) {
+            setWatchStatus(input: $input) { ${progressFields} }
+          }
+        `,
+        { input: toProgressInput(user!.id, item) },
+      );
+      return fromProgress(data.setWatchStatus);
+    },
+    onSuccess: invalidateProgress,
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async ({ id, media_type }: Pick<SavedItem, "id" | "media_type">) => {
+      await graphqlClient.request(
+        `
+          mutation RemoveWatchProgress($userId: String!, $tmdbId: Int!, $mediaType: MediaType!) {
+            removeWatchProgress(userId: $userId, tmdbId: $tmdbId, mediaType: $mediaType)
+          }
+        `,
+        { userId: user!.id, tmdbId: id, mediaType: media_type },
+      );
+    },
+    onSuccess: invalidateProgress,
+  });
+
+  return {
+    setStatus: setStatusMutation.mutate,
+    removeProgress: removeMutation.mutate,
+    updating: setStatusMutation.isPending || removeMutation.isPending,
+  };
+}
+
+export function useContinueWatching() {
+  const { user } = useAuth();
+
+  const query = useQuery({
+    queryKey: ["continue-watching", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      const data = await graphqlClient.request<any>(
+        `
+          query ContinueWatching($userId: String!) {
+            continueWatching(userId: $userId) { ${progressFields} }
+          }
+        `,
+        { userId: user!.id },
+      );
+      return data.continueWatching.map(fromProgress) as WatchProgress[];
+    },
+  });
+
+  return { items: query.data ?? [], loading: query.isLoading };
 }

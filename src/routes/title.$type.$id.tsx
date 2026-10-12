@@ -1,11 +1,42 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Bookmark, BookmarkCheck, Star, Play, Calendar, Clock, Tv, Loader2 } from "lucide-react";
+import {
+  Bookmark,
+  BookmarkCheck,
+  Star,
+  Play,
+  Calendar,
+  Clock,
+  Tv,
+  Loader2,
+  CheckCircle2,
+  Circle,
+  RotateCcw,
+} from "lucide-react";
 import { TMDB_IMG, posterUrl, MediaCard } from "@/components/MediaCard";
 import { useAuth } from "@/lib/auth-context";
-import { getDetails } from "@/lib/tmdb.functions";
-import { useWatchlist, useRatings } from "@/lib/user-data";
+import { getDetails, getSeasonDetails, type EpisodeInfo } from "@/lib/tmdb.functions";
+import { useWatchlist, useRatings, useWatchProgress, type WatchStatus } from "@/lib/user-data";
 import { Link } from "@/lib/navigation";
+
+const STATUS_LABELS: Record<WatchStatus, string> = {
+  PLAN_TO_WATCH: "Plan to Watch",
+  WATCHING: "Watching",
+  COMPLETED: "Completed",
+  ON_HOLD: "On Hold",
+  DROPPED: "Dropped",
+};
+
+function progressPercent(watched: number, total: number) {
+  if (!total) return 0;
+  return Math.min(100, Math.round((watched / total) * 100));
+}
+
+function isAvailable(episode: EpisodeInfo) {
+  if (!episode.air_date) return false;
+  const airDate = new Date(episode.air_date).getTime();
+  return Number.isFinite(airDate) && airDate <= Date.now();
+}
 
 function SeasonRatingCard({
   seasonNumber,
@@ -29,17 +60,28 @@ function SeasonRatingCard({
       <div className="mb-3 flex items-center gap-3">
         <div className="h-12 w-12 overflow-hidden rounded-xl border border-border bg-background/50">
           {posterPath ? (
-            <img src={posterUrl(posterPath, "w92")!} alt={seasonName} className="h-full w-full object-cover" />
+            <img
+              src={posterUrl(posterPath, "w92")!}
+              alt={seasonName}
+              className="h-full w-full object-cover"
+            />
           ) : (
-            <div className="grid h-full w-full place-items-center text-[10px] font-bold text-muted-foreground">S{seasonNumber}</div>
+            <div className="grid h-full w-full place-items-center text-[10px] font-bold text-muted-foreground">
+              S{seasonNumber}
+            </div>
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Staffel {seasonNumber}</div>
+          <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+            Staffel {seasonNumber}
+          </div>
           <div className="truncate text-sm font-semibold">{seasonName}</div>
         </div>
         {currentRating > 0 && (
-          <button onClick={onRemove} className="text-[10px] text-muted-foreground hover:text-destructive">
+          <button
+            onClick={onRemove}
+            className="text-[10px] text-muted-foreground hover:text-destructive"
+          >
             löschen
           </button>
         )}
@@ -56,7 +98,9 @@ function SeasonRatingCard({
               className="p-0.5 transition-transform hover:scale-110"
               aria-label={`Staffel ${seasonNumber}: ${n} von 10 Sternen`}
             >
-              <Star className={`size-4 transition-colors ${active ? "text-[var(--color-gold)] fill-[var(--color-gold)]" : "text-muted-foreground/35"}`} />
+              <Star
+                className={`size-4 transition-colors ${active ? "text-[var(--color-gold)] fill-[var(--color-gold)]" : "text-muted-foreground/35"}`}
+              />
             </button>
           );
         })}
@@ -72,32 +116,63 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
   const { user } = useAuth();
   const { inList, toggle } = useWatchlist();
   const { getRating, setRating, removeRating } = useRatings();
+  const { progress, setStatus, setEpisodeWatched, setSeasonWatched, removeProgress, updating } =
+    useWatchProgress(id, media);
   const [hover, setHover] = useState(0);
-  const { data: d, isLoading, error } = useQuery({
+  const [activeSeason, setActiveSeason] = useState<number | null>(null);
+  const {
+    data: d,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ["details", media, id, user?.id],
     queryFn: () => getDetails({ data: { media, id, userId: user?.id } }),
     staleTime: 1000 * 60 * 30,
   });
+  const selectedSeason =
+    activeSeason ??
+    (media === "tv"
+      ? (d?.seasons.find((season) => season.season_number !== 0)?.season_number ?? null)
+      : null);
+  const seasonQ = useQuery({
+    queryKey: ["season-details", id, selectedSeason, user?.id],
+    enabled: media === "tv" && Boolean(d && selectedSeason),
+    queryFn: () =>
+      getSeasonDetails({ data: { tvId: id, seasonNumber: selectedSeason!, userId: user?.id } }),
+    staleTime: 1000 * 60 * 10,
+  });
 
   if (isLoading) {
-    return <div className="py-24 grid place-items-center text-muted-foreground"><Loader2 className="animate-spin" /></div>;
+    return (
+      <div className="py-24 grid place-items-center text-muted-foreground">
+        <Loader2 className="animate-spin" />
+      </div>
+    );
   }
 
   if (error || !d) {
-    return <div className="py-24 text-center text-muted-foreground">Dieser Titel konnte nicht geladen werden.</div>;
+    return (
+      <div className="py-24 text-center text-muted-foreground">
+        Dieser Titel konnte nicht geladen werden.
+      </div>
+    );
   }
 
   const saved = inList(d.id, d.media_type);
   const myRating = getRating(d.id, d.media_type);
-  const seasonCards = media === "tv"
-    ? (d.seasons ?? []).filter((season) => season.season_number !== 0).map((season) => ({
-        seasonNumber: season.season_number,
-        seasonName: season.name,
-        posterPath: season.poster_path,
-        rating: getRating(d.id, d.media_type, season.season_number),
-      }))
-    : [];
-
+  const totalEpisodes =
+    d.number_of_episodes ?? d.seasons.reduce((sum, season) => sum + season.episode_count, 0);
+  const seasonCards =
+    media === "tv"
+      ? (d.seasons ?? [])
+          .filter((season) => season.season_number !== 0)
+          .map((season) => ({
+            seasonNumber: season.season_number,
+            seasonName: season.name,
+            posterPath: season.poster_path,
+            rating: getRating(d.id, d.media_type, season.season_number),
+          }))
+      : [];
   const item = {
     id: d.id,
     media_type: d.media_type,
@@ -109,6 +184,9 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
 
   const year = d.release_date ? new Date(d.release_date).getFullYear() : "—";
   const runtime = d.runtime ? `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m` : null;
+  const watchedEpisodes = progress?.watchedEpisodes ?? 0;
+  const totalForProgress = progress?.totalEpisodes || totalEpisodes;
+  const pct = progressPercent(watchedEpisodes, totalForProgress);
 
   return (
     <div className="pb-16">
@@ -116,7 +194,11 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
       <div className="relative">
         <div className="absolute inset-0 h-[60vh] overflow-hidden">
           {d.backdrop_path && (
-            <img src={`${TMDB_IMG}/original${d.backdrop_path}`} alt="" className="size-full object-cover" />
+            <img
+              src={`${TMDB_IMG}/original${d.backdrop_path}`}
+              alt=""
+              className="size-full object-cover"
+            />
           )}
           <div className="absolute inset-0 bg-gradient-to-t from-background via-background/85 to-background/40" />
         </div>
@@ -127,9 +209,15 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
             <div className="mx-auto md:mx-0 w-[200px] md:w-full">
               <div className="aspect-[2/3] rounded-2xl overflow-hidden border border-border shadow-2xl">
                 {d.poster_path ? (
-                  <img src={posterUrl(d.poster_path, "w500")!} alt={d.title} className="size-full object-cover" />
+                  <img
+                    src={posterUrl(d.poster_path, "w500")!}
+                    alt={d.title}
+                    className="size-full object-cover"
+                  />
                 ) : (
-                  <div className="size-full grid place-items-center bg-surface text-muted-foreground">No poster</div>
+                  <div className="size-full grid place-items-center bg-surface text-muted-foreground">
+                    No poster
+                  </div>
                 )}
               </div>
             </div>
@@ -176,37 +264,121 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                 )}
                 {d.number_of_seasons && (
                   <div className="inline-flex items-center gap-1.5 text-muted-foreground">
-                    <Tv className="size-4" /> {d.number_of_seasons} Staffel{d.number_of_seasons > 1 ? "n" : ""}
+                    <Tv className="size-4" /> {d.number_of_seasons} Staffel
+                    {d.number_of_seasons > 1 ? "n" : ""}
                   </div>
                 )}
               </div>
 
               <div className="flex flex-wrap gap-2">
                 {d.genres.map((g) => (
-                  <span key={g.id} className="px-3 py-1 rounded-full bg-surface border border-border text-xs font-medium">{g.name}</span>
+                  <span
+                    key={g.id}
+                    className="px-3 py-1 rounded-full bg-surface border border-border text-xs font-medium"
+                  >
+                    {g.name}
+                  </span>
                 ))}
               </div>
 
+              {user && (
+                <div className="bg-surface border border-border rounded-2xl p-4 max-w-xl space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold">Watch Status</h3>
+                      {media === "tv" && (
+                        <p className="text-xs text-muted-foreground">
+                          {watchedEpisodes}/{totalForProgress || "?"} Episoden gesehen
+                        </p>
+                      )}
+                    </div>
+                    <select
+                      value={progress?.status ?? "PLAN_TO_WATCH"}
+                      disabled={updating}
+                      onChange={(event) =>
+                        setStatus({
+                          ...item,
+                          status: event.target.value as WatchStatus,
+                          totalEpisodes,
+                        })
+                      }
+                      className="h-10 px-3 rounded-full bg-background border border-border text-sm"
+                    >
+                      {(Object.keys(STATUS_LABELS) as WatchStatus[]).map((status) => (
+                        <option key={status} value={status}>
+                          {STATUS_LABELS[status]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {media === "tv" && (
+                    <>
+                      <div className="h-2 overflow-hidden rounded-full bg-background">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      {progress?.nextEpisode ? (
+                        <p className="text-xs text-muted-foreground">
+                          Nächste Episode: S{progress.nextEpisode.season_number}E
+                          {progress.nextEpisode.episode_number} · {progress.nextEpisode.name}
+                        </p>
+                      ) : watchedEpisodes > 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Keine verfügbare ungesehene Episode gefunden.
+                        </p>
+                      ) : null}
+                    </>
+                  )}
+                  {progress && (
+                    <button
+                      type="button"
+                      onClick={() => removeProgress()}
+                      disabled={updating}
+                      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-destructive"
+                    >
+                      <RotateCcw className="size-3.5" />
+                      Fortschritt zurücksetzen
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2">
-                <h2 className="text-sm uppercase tracking-wider text-muted-foreground font-bold">Inhalt</h2>
-                <p className="text-base text-foreground/90 leading-relaxed max-w-3xl">{d.overview || "Keine Beschreibung vorhanden."}</p>
+                <h2 className="text-sm uppercase tracking-wider text-muted-foreground font-bold">
+                  Inhalt
+                </h2>
+                <p className="text-base text-foreground/90 leading-relaxed max-w-3xl">
+                  {d.overview || "Keine Beschreibung vorhanden."}
+                </p>
               </div>
 
               {/* Actions */}
               <div className="flex flex-wrap gap-3 pt-2">
                 {d.trailerKey && (
-                  <a href={`https://www.youtube.com/watch?v=${d.trailerKey}`} target="_blank" rel="noreferrer"
-                    className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 shadow-lg shadow-primary/30">
+                  <a
+                    href={`https://www.youtube.com/watch?v=${d.trailerKey}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 shadow-lg shadow-primary/30"
+                  >
                     <Play className="size-4 fill-current" /> Trailer
                   </a>
                 )}
                 {user ? (
-                  <button onClick={() => toggle(item)} className={`inline-flex items-center gap-2 h-11 px-6 rounded-full font-semibold transition ${saved ? "bg-accent text-accent-foreground" : "bg-surface border border-border hover:bg-surface-2"}`}>
+                  <button
+                    onClick={() => toggle(item)}
+                    className={`inline-flex items-center gap-2 h-11 px-6 rounded-full font-semibold transition ${saved ? "bg-accent text-accent-foreground" : "bg-surface border border-border hover:bg-surface-2"}`}
+                  >
                     {saved ? <BookmarkCheck className="size-4" /> : <Bookmark className="size-4" />}
                     {saved ? "In Watchlist" : "Zur Watchlist"}
                   </button>
                 ) : (
-                  <Link href="/auth" className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-surface border border-border font-semibold hover:bg-surface-2">
+                  <Link
+                    href="/auth"
+                    className="inline-flex items-center gap-2 h-11 px-6 rounded-full bg-surface border border-border font-semibold hover:bg-surface-2"
+                  >
                     <Bookmark className="size-4" /> Login zum Speichern
                   </Link>
                 )}
@@ -216,9 +388,14 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
               {user && (
                 <div className="bg-surface border border-border rounded-2xl p-4 max-w-md">
                   <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-bold">{media === "tv" ? "Gesamtbewertung der Serie" : "Deine Bewertung"}</h3>
+                    <h3 className="text-sm font-bold">
+                      {media === "tv" ? "Gesamtbewertung der Serie" : "Deine Bewertung"}
+                    </h3>
                     {myRating > 0 && (
-                      <button onClick={() => removeRating(d.id, d.media_type)} className="text-xs text-muted-foreground hover:text-destructive">
+                      <button
+                        onClick={() => removeRating(d.id, d.media_type)}
+                        className="text-xs text-muted-foreground hover:text-destructive"
+                      >
                         zurücksetzen
                       </button>
                     )}
@@ -230,11 +407,23 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                         <button
                           key={n}
                           onMouseEnter={() => setHover(n)}
-                          onClick={() => setRating({ id: d.id, media_type: d.media_type, title: d.title, poster_path: d.poster_path, release_date: d.release_date, vote_average: d.vote_average, rating: n })}
+                          onClick={() =>
+                            setRating({
+                              id: d.id,
+                              media_type: d.media_type,
+                              title: d.title,
+                              poster_path: d.poster_path,
+                              release_date: d.release_date,
+                              vote_average: d.vote_average,
+                              rating: n,
+                            })
+                          }
                           className="p-1 transition-transform hover:scale-110"
                           aria-label={`${n} Sterne`}
                         >
-                          <Star className={`size-5 transition-colors ${active ? "text-[var(--color-gold)] fill-[var(--color-gold)]" : "text-muted-foreground/40"}`} />
+                          <Star
+                            className={`size-5 transition-colors ${active ? "text-[var(--color-gold)] fill-[var(--color-gold)]" : "text-muted-foreground/40"}`}
+                          />
                         </button>
                       );
                     })}
@@ -251,7 +440,9 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
             <section className="mt-12 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-2xl font-extrabold tracking-tight">Staffel-Bewertungen</h2>
-                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">pro Staffel</span>
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                  pro Staffel
+                </span>
               </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {seasonCards.map((season) => (
@@ -261,16 +452,18 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                     seasonName={season.seasonName}
                     posterPath={season.posterPath}
                     currentRating={season.rating}
-                    onRate={(rating) => setRating({
-                      id: d.id,
-                      media_type: d.media_type,
-                      title: d.title,
-                      poster_path: d.poster_path,
-                      release_date: d.release_date,
-                      vote_average: d.vote_average,
-                      seasonNumber: season.seasonNumber,
-                      rating,
-                    })}
+                    onRate={(rating) =>
+                      setRating({
+                        id: d.id,
+                        media_type: d.media_type,
+                        title: d.title,
+                        poster_path: d.poster_path,
+                        release_date: d.release_date,
+                        vote_average: d.vote_average,
+                        seasonNumber: season.seasonNumber,
+                        rating,
+                      })
+                    }
                     onRemove={() => removeRating(d.id, d.media_type, season.seasonNumber)}
                   />
                 ))}
@@ -278,24 +471,211 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
             </section>
           )}
 
+          {media === "tv" && seasonCards.length > 0 && (
+            <section className="mt-12 space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-extrabold tracking-tight">Episode Tracker</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Markiere Episoden oder ganze Staffeln als gesehen, ohne deine Bewertung zu
+                    verändern.
+                  </p>
+                </div>
+                <div className="text-sm font-semibold text-primary">{pct}% komplett</div>
+              </div>
+
+              <div className="flex gap-2 overflow-x-auto scroll-row pb-2">
+                {seasonCards.map((season) => (
+                  <button
+                    key={season.seasonNumber}
+                    type="button"
+                    onClick={() => setActiveSeason(season.seasonNumber)}
+                    className={`shrink-0 h-10 px-4 rounded-full border text-sm font-semibold transition ${
+                      selectedSeason === season.seasonNumber
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-surface border-border text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Staffel {season.seasonNumber}
+                  </button>
+                ))}
+              </div>
+
+              {seasonQ.isLoading ? (
+                <div className="py-10 grid place-items-center text-muted-foreground">
+                  <Loader2 className="animate-spin" />
+                </div>
+              ) : seasonQ.error || !seasonQ.data ? (
+                <div className="py-10 text-center text-muted-foreground">
+                  Diese Staffel konnte nicht geladen werden.
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-border bg-surface/70 overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+                    <div>
+                      <h3 className="font-bold">{seasonQ.data.name}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        {seasonQ.data.episodes.filter((episode) => episode.watched).length}/
+                        {seasonQ.data.episodes.filter(isAvailable).length} verfügbare Episoden
+                        gesehen
+                      </p>
+                    </div>
+                    {user ? (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={updating}
+                          onClick={() =>
+                            setSeasonWatched({
+                              item,
+                              seasonNumber: seasonQ.data.season_number,
+                              episodes: seasonQ.data.episodes.filter(isAvailable),
+                              watched: true,
+                              totalEpisodes,
+                            })
+                          }
+                          className="h-9 px-3 rounded-full bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 disabled:opacity-60"
+                        >
+                          Staffel gesehen
+                        </button>
+                        <button
+                          type="button"
+                          disabled={updating}
+                          onClick={() =>
+                            setSeasonWatched({
+                              item,
+                              seasonNumber: seasonQ.data.season_number,
+                              episodes: seasonQ.data.episodes.filter(isAvailable),
+                              watched: false,
+                              totalEpisodes,
+                            })
+                          }
+                          className="h-9 px-3 rounded-full bg-background border border-border text-xs font-semibold hover:bg-surface-2 disabled:opacity-60"
+                        >
+                          zurücksetzen
+                        </button>
+                      </div>
+                    ) : (
+                      <Link
+                        href="/auth"
+                        className="h-9 px-3 inline-flex items-center rounded-full bg-background border border-border text-xs font-semibold hover:bg-surface-2"
+                      >
+                        Login zum Tracken
+                      </Link>
+                    )}
+                  </div>
+
+                  <div className="divide-y divide-border">
+                    {seasonQ.data.episodes.map((episode) => {
+                      const available = isAvailable(episode);
+                      const still = episode.still_path
+                        ? `${TMDB_IMG}/w300${episode.still_path}`
+                        : null;
+                      return (
+                        <div
+                          key={episode.episode_number}
+                          className="grid gap-3 p-4 sm:grid-cols-[120px_1fr_auto]"
+                        >
+                          <div className="h-20 overflow-hidden rounded-xl bg-background border border-border">
+                            {still && available ? (
+                              <img src={still} alt="" className="size-full object-cover" />
+                            ) : (
+                              <div className="grid size-full place-items-center text-xs text-muted-foreground">
+                                S{episode.season_number}E{episode.episode_number}
+                              </div>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-bold text-primary">
+                                E{episode.episode_number}
+                              </span>
+                              <h4 className="font-semibold">
+                                {available ? episode.name : "Noch nicht ausgestrahlt"}
+                              </h4>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <span>
+                                {episode.air_date
+                                  ? new Date(episode.air_date).toLocaleDateString()
+                                  : "Kein Datum"}
+                              </span>
+                              {episode.runtime ? <span>{episode.runtime} min</span> : null}
+                            </div>
+                            <p className="mt-2 text-sm text-foreground/75 line-clamp-2">
+                              {available
+                                ? episode.overview || "Keine Beschreibung vorhanden."
+                                : "Beschreibung wird ausgeblendet, bis die Episode verfügbar ist."}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={!user || !available || updating}
+                            onClick={() =>
+                              setEpisodeWatched({
+                                item,
+                                episode,
+                                watched: !episode.watched,
+                                totalEpisodes,
+                              })
+                            }
+                            className={`self-start inline-flex items-center gap-2 h-10 px-3 rounded-full border text-xs font-semibold transition disabled:opacity-50 ${
+                              episode.watched
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-background border-border hover:bg-surface-2"
+                            }`}
+                          >
+                            {episode.watched ? (
+                              <CheckCircle2 className="size-4" />
+                            ) : (
+                              <Circle className="size-4" />
+                            )}
+                            {episode.watched ? "gesehen" : "markieren"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Streaming providers */}
-          {d.watchProviders && (d.watchProviders.flatrate.length || d.watchProviders.rent.length || d.watchProviders.buy.length) ? (
+          {d.watchProviders &&
+          (d.watchProviders.flatrate.length ||
+            d.watchProviders.rent.length ||
+            d.watchProviders.buy.length) ? (
             <section className="mt-12 space-y-4">
               <h2 className="text-2xl font-extrabold tracking-tight">Wo streamen?</h2>
               <p className="text-xs text-muted-foreground">Region: {d.watchProviders.region}</p>
               <div className="grid sm:grid-cols-3 gap-4">
-                {([
-                  ["Streaming (Flatrate)", d.watchProviders.flatrate],
-                  ["Leihen", d.watchProviders.rent],
-                  ["Kaufen", d.watchProviders.buy],
-                ] as const).map(([label, list]) =>
+                {(
+                  [
+                    ["Streaming (Flatrate)", d.watchProviders.flatrate],
+                    ["Leihen", d.watchProviders.rent],
+                    ["Kaufen", d.watchProviders.buy],
+                  ] as const
+                ).map(([label, list]) =>
                   list.length ? (
                     <div key={label} className="bg-surface border border-border rounded-2xl p-4">
-                      <h3 className="text-xs uppercase tracking-wider font-bold text-muted-foreground mb-3">{label}</h3>
+                      <h3 className="text-xs uppercase tracking-wider font-bold text-muted-foreground mb-3">
+                        {label}
+                      </h3>
                       <div className="flex flex-wrap gap-2">
-                        {list.map((p: any) => (
-                          <div key={p.provider_id} title={p.provider_name} className="size-12 rounded-xl overflow-hidden border border-border">
-                            {p.logo_path && <img src={`${TMDB_IMG}/w92${p.logo_path}`} alt={p.provider_name} className="size-full object-cover" />}
+                        {list.map((p) => (
+                          <div
+                            key={p.provider_id}
+                            title={p.provider_name}
+                            className="size-12 rounded-xl overflow-hidden border border-border"
+                          >
+                            {p.logo_path && (
+                              <img
+                                src={`${TMDB_IMG}/w92${p.logo_path}`}
+                                alt={p.provider_name}
+                                className="size-full object-cover"
+                              />
+                            )}
                           </div>
                         ))}
                       </div>
@@ -304,7 +684,12 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                 )}
               </div>
               {d.watchProviders.link && (
-                <a href={d.watchProviders.link} target="_blank" rel="noreferrer" className="inline-block text-sm text-primary hover:underline">
+                <a
+                  href={d.watchProviders.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block text-sm text-primary hover:underline"
+                >
                   Details bei JustWatch →
                 </a>
               )}
@@ -320,9 +705,15 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                   <div key={c.id} className="shrink-0 w-[120px] text-center">
                     <div className="aspect-[2/3] rounded-xl overflow-hidden bg-surface border border-border mb-2">
                       {c.profile_path ? (
-                        <img src={`${TMDB_IMG}/w185${c.profile_path}`} alt={c.name} className="size-full object-cover" />
+                        <img
+                          src={`${TMDB_IMG}/w185${c.profile_path}`}
+                          alt={c.name}
+                          className="size-full object-cover"
+                        />
                       ) : (
-                        <div className="size-full grid place-items-center text-2xl text-muted-foreground">{c.name.charAt(0)}</div>
+                        <div className="size-full grid place-items-center text-2xl text-muted-foreground">
+                          {c.name.charAt(0)}
+                        </div>
                       )}
                     </div>
                     <p className="text-xs font-semibold line-clamp-1">{c.name}</p>

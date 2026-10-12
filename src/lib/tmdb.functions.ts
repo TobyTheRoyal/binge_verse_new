@@ -25,6 +25,29 @@ export interface SeasonInfo {
   episode_count: number;
 }
 
+export interface EpisodeInfo {
+  season_number: number;
+  episode_number: number;
+  name: string;
+  overview: string;
+  air_date: string | null;
+  runtime: number | null;
+  still_path: string | null;
+  vote_average: number;
+  watched: boolean;
+  watchedAt: number | null;
+}
+
+export interface SeasonDetails {
+  season_number: number;
+  name: string;
+  overview: string;
+  poster_path: string | null;
+  air_date: string | null;
+  episode_count: number;
+  episodes: EpisodeInfo[];
+}
+
 export interface MediaDetails extends MediaItem {
   tagline: string;
   runtime: number | null;
@@ -136,6 +159,33 @@ function fromDetails(raw: any): MediaDetails {
   };
 }
 
+function fromEpisode(raw: any): EpisodeInfo {
+  return {
+    season_number: raw.seasonNumber,
+    episode_number: raw.episodeNumber,
+    name: raw.name,
+    overview: raw.overview,
+    air_date: raw.airDate,
+    runtime: raw.runtime,
+    still_path: raw.stillPath,
+    vote_average: raw.voteAverage ?? 0,
+    watched: Boolean(raw.watched),
+    watchedAt: raw.watchedAt ?? null,
+  };
+}
+
+function fromSeasonDetails(raw: any): SeasonDetails {
+  return {
+    season_number: raw.seasonNumber,
+    name: raw.name,
+    overview: raw.overview,
+    poster_path: raw.posterPath,
+    air_date: raw.airDate,
+    episode_count: raw.episodeCount,
+    episodes: (raw.episodes ?? []).map(fromEpisode),
+  };
+}
+
 export async function getHomeData() {
   const data = await graphqlClient.request<any>(`
     query Home {
@@ -165,7 +215,12 @@ export async function getHomeData() {
 }
 
 function rankSearchResults(results: MediaItem[], query: string) {
-  const normalizedQuery = query.trim().toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+  const normalizedQuery = query
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!normalizedQuery) return results;
 
   const queryWords = normalizedQuery.split(/\s+/).filter(Boolean);
@@ -176,22 +231,47 @@ function rankSearchResults(results: MediaItem[], query: string) {
     const aOverview = (a.overview ?? "").toLowerCase();
     const bOverview = (b.overview ?? "").toLowerCase();
 
-    const cleanTitle = (title: string) => title.replace(/^(the|a|an)\s+/i, "").replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const cleanTitle = (title: string) =>
+      title
+        .replace(/^(the|a|an)\s+/i, "")
+        .replace(/[^a-z0-9]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
     const toDateScore = (date: string | null) => {
       const parsed = date ? new Date(date).getTime() : 0;
       return Number.isFinite(parsed) ? parsed : 0;
     };
 
-    const scoreTitle = (title: string, overview: string, voteAverage: number, popularity: number, releaseDate: string | null) => {
-      const normalizedTitle = title.replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const scoreTitle = (
+      title: string,
+      overview: string,
+      voteAverage: number,
+      popularity: number,
+      releaseDate: string | null,
+    ) => {
+      const normalizedTitle = title
+        .replace(/[^a-z0-9]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
       const titleWithoutArticle = cleanTitle(title);
 
       let matchScore = 0;
       const titleWords = (normalizedTitle + " " + titleWithoutArticle).split(/\s+/).filter(Boolean);
 
-      if (normalizedTitle === normalizedQuery || titleWithoutArticle === normalizedQuery) matchScore += 150000;
-      if (normalizedTitle.startsWith(normalizedQuery) || titleWithoutArticle.startsWith(normalizedQuery)) matchScore += 120000;
-      if (normalizedTitle.includes(normalizedQuery) || titleWithoutArticle.includes(normalizedQuery)) matchScore += 90000;
+      if (normalizedTitle === normalizedQuery || titleWithoutArticle === normalizedQuery)
+        matchScore += 150000;
+      if (
+        normalizedTitle.startsWith(normalizedQuery) ||
+        titleWithoutArticle.startsWith(normalizedQuery)
+      )
+        matchScore += 120000;
+      if (
+        normalizedTitle.includes(normalizedQuery) ||
+        titleWithoutArticle.includes(normalizedQuery)
+      )
+        matchScore += 90000;
       if (overview.includes(normalizedQuery)) matchScore += 6000;
 
       for (const word of queryWords) {
@@ -207,20 +287,40 @@ function rankSearchResults(results: MediaItem[], query: string) {
       }
 
       const firstQueryWord = queryWords[0] ?? normalizedQuery;
-      if (normalizedTitle.startsWith(firstQueryWord) || titleWithoutArticle.startsWith(firstQueryWord)) matchScore += 15000;
-      if (normalizedTitle.includes(firstQueryWord) || titleWithoutArticle.includes(firstQueryWord)) matchScore += 8000;
+      if (
+        normalizedTitle.startsWith(firstQueryWord) ||
+        titleWithoutArticle.startsWith(firstQueryWord)
+      )
+        matchScore += 15000;
+      if (normalizedTitle.includes(firstQueryWord) || titleWithoutArticle.includes(firstQueryWord))
+        matchScore += 8000;
 
       const recencyScore = toDateScore(releaseDate);
       return { matchScore, popularity, recencyScore, voteAverage };
     };
 
-    const aScore = scoreTitle(aTitle, aOverview, a.vote_average ?? 0, a.popularity ?? 0, a.release_date ?? null);
-    const bScore = scoreTitle(bTitle, bOverview, b.vote_average ?? 0, b.popularity ?? 0, b.release_date ?? null);
+    const aScore = scoreTitle(
+      aTitle,
+      aOverview,
+      a.vote_average ?? 0,
+      a.popularity ?? 0,
+      a.release_date ?? null,
+    );
+    const bScore = scoreTitle(
+      bTitle,
+      bOverview,
+      b.vote_average ?? 0,
+      b.popularity ?? 0,
+      b.release_date ?? null,
+    );
 
     if (bScore.matchScore !== aScore.matchScore) return bScore.matchScore - aScore.matchScore;
-    if (bScore.popularity !== aScore.popularity) return (bScore.popularity ?? 0) - (aScore.popularity ?? 0);
-    if (bScore.recencyScore !== aScore.recencyScore) return bScore.recencyScore - aScore.recencyScore;
-    if (bScore.voteAverage !== aScore.voteAverage) return (bScore.voteAverage ?? 0) - (aScore.voteAverage ?? 0);
+    if (bScore.popularity !== aScore.popularity)
+      return (bScore.popularity ?? 0) - (aScore.popularity ?? 0);
+    if (bScore.recencyScore !== aScore.recencyScore)
+      return bScore.recencyScore - aScore.recencyScore;
+    if (bScore.voteAverage !== aScore.voteAverage)
+      return (bScore.voteAverage ?? 0) - (aScore.voteAverage ?? 0);
     return 0;
   });
 }
@@ -292,7 +392,11 @@ export async function getGenres({ data }: { data: { media: Media } }) {
   return result.genres as { id: number; name: string }[];
 }
 
-export async function getDetails({ data }: { data: { media: Media; id: number; userId?: string } }) {
+export async function getDetails({
+  data,
+}: {
+  data: { media: Media; id: number; userId?: string };
+}) {
   const result = await graphqlClient.request<any>(
     `
       query Details($media: MediaType!, $id: Int!, $userId: String) {
@@ -346,6 +450,42 @@ export async function getDetails({ data }: { data: { media: Media; id: number; u
   );
 
   return fromDetails(result.details);
+}
+
+export async function getSeasonDetails({
+  data,
+}: {
+  data: { tvId: number; seasonNumber: number; userId?: string };
+}) {
+  const result = await graphqlClient.request<any>(
+    `
+      query SeasonDetails($tvId: Int!, $seasonNumber: Int!, $userId: String) {
+        seasonDetails(tvId: $tvId, seasonNumber: $seasonNumber, userId: $userId) {
+          seasonNumber
+          name
+          overview
+          posterPath
+          airDate
+          episodeCount
+          episodes {
+            seasonNumber
+            episodeNumber
+            name
+            overview
+            airDate
+            runtime
+            stillPath
+            voteAverage
+            watched
+            watchedAt
+          }
+        }
+      }
+    `,
+    data,
+  );
+
+  return fromSeasonDetails(result.seasonDetails);
 }
 
 export async function getRecommendationsFor({ data }: { data: { media: Media; id: number } }) {

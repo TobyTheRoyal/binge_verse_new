@@ -17,6 +17,7 @@ const SUGGESTION_CACHE_TTL_MS = 1000 * 60 * 5;
 const SUGGESTION_NEXT_LETTERS = ["a", "e", "i", "o", "u", "r", "s", "t", "l", "n", "m", "h", "d"];
 
 type MediaType = "movie" | "tv";
+type WatchStatus = "PLAN_TO_WATCH" | "WATCHING" | "COMPLETED" | "ON_HOLD" | "DROPPED";
 
 type TmdbMedia = {
   id: number;
@@ -43,6 +44,26 @@ type SavedMedia = {
   releaseDate: string | null;
   voteAverage: number;
 };
+
+type TmdbEpisode = {
+  id: number;
+  name?: string;
+  overview?: string;
+  air_date?: string | null;
+  episode_number: number;
+  season_number: number;
+  runtime?: number | null;
+  still_path?: string | null;
+  vote_average?: number;
+};
+
+const WATCH_STATUSES: WatchStatus[] = [
+  "PLAN_TO_WATCH",
+  "WATCHING",
+  "COMPLETED",
+  "ON_HOLD",
+  "DROPPED",
+];
 
 const ratingSchema = new Schema(
   {
@@ -76,8 +97,58 @@ const watchlistSchema = new Schema(
 
 watchlistSchema.index({ userId: 1, tmdbId: 1, mediaType: 1 }, { unique: true });
 
+const watchProgressSchema = new Schema(
+  {
+    userId: { type: String, required: true, index: true },
+    tmdbId: { type: Number, required: true },
+    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
+    title: { type: String, required: true },
+    posterPath: { type: String, default: null },
+    releaseDate: { type: String, default: null },
+    voteAverage: { type: Number, default: 0 },
+    status: { type: String, required: true, enum: WATCH_STATUSES, default: "PLAN_TO_WATCH" },
+    totalEpisodes: { type: Number, default: 0 },
+    watchedAt: { type: Date, default: null },
+    lastActivityAt: { type: Date, default: Date.now, index: true },
+  },
+  { timestamps: true },
+);
+
+watchProgressSchema.index({ userId: 1, tmdbId: 1, mediaType: 1 }, { unique: true });
+watchProgressSchema.index({ userId: 1, status: 1, lastActivityAt: -1 });
+
+const episodeProgressSchema = new Schema(
+  {
+    userId: { type: String, required: true, index: true },
+    tmdbId: { type: Number, required: true },
+    title: { type: String, required: true },
+    posterPath: { type: String, default: null },
+    releaseDate: { type: String, default: null },
+    voteAverage: { type: Number, default: 0 },
+    seasonNumber: { type: Number, required: true },
+    episodeNumber: { type: Number, required: true },
+    episodeTitle: { type: String, default: "" },
+    airDate: { type: String, default: null },
+    runtime: { type: Number, default: null },
+    stillPath: { type: String, default: null },
+    watchedAt: { type: Date, required: true, default: Date.now },
+  },
+  { timestamps: true },
+);
+
+episodeProgressSchema.index(
+  { userId: 1, tmdbId: 1, seasonNumber: 1, episodeNumber: 1 },
+  { unique: true },
+);
+episodeProgressSchema.index({ userId: 1, watchedAt: -1 });
+
 const Rating = mongoose.models.Rating || mongoose.model("Rating", ratingSchema);
-const WatchlistItem = mongoose.models.WatchlistItem || mongoose.model("WatchlistItem", watchlistSchema);
+const WatchlistItem =
+  mongoose.models.WatchlistItem || mongoose.model("WatchlistItem", watchlistSchema);
+const WatchProgress =
+  mongoose.models.WatchProgress || mongoose.model("WatchProgress", watchProgressSchema);
+const EpisodeProgress =
+  mongoose.models.EpisodeProgress || mongoose.model("EpisodeProgress", episodeProgressSchema);
 
 function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
   const mediaType = raw.media_type ?? fallbackMedia ?? (raw.title ? "movie" : "tv");
@@ -100,7 +171,11 @@ function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
 type NormalizedMedia = ReturnType<typeof normalizeMedia>;
 type SearchSuggestionCandidate = NormalizedMedia & { suggestionSourceRank?: number };
 
-const suggestionCache = new Map<string, { expiresAt: number; items: SearchSuggestionCandidate[] }>();
+const suggestionCache = new Map<
+  string,
+  { expiresAt: number; items: SearchSuggestionCandidate[] }
+>();
+const seasonCache = new Map<string, { expiresAt: number; data: any }>();
 
 function normalizedSearchText(value: string) {
   return value
@@ -133,8 +208,10 @@ function scoreSearchSuggestion(item: SearchSuggestionCandidate, query: string) {
   let matchScore = 0;
 
   if (title === normalizedQuery || titleWithoutArticle === normalizedQuery) matchScore += 180000;
-  if (title.startsWith(normalizedQuery) || titleWithoutArticle.startsWith(normalizedQuery)) matchScore += 150000;
-  if (title.includes(normalizedQuery) || titleWithoutArticle.includes(normalizedQuery)) matchScore += 110000;
+  if (title.startsWith(normalizedQuery) || titleWithoutArticle.startsWith(normalizedQuery))
+    matchScore += 150000;
+  if (title.includes(normalizedQuery) || titleWithoutArticle.includes(normalizedQuery))
+    matchScore += 110000;
 
   for (const word of queryWords) {
     if (titleWords.includes(word)) matchScore += 12000;
@@ -147,7 +224,9 @@ function scoreSearchSuggestion(item: SearchSuggestionCandidate, query: string) {
   const releaseDate = dateScore(item.releaseDate);
   const now = Date.now();
   const twoYears = 1000 * 60 * 60 * 24 * 365 * 2;
-  const releaseDistanceDays = releaseDate ? Math.abs(now - releaseDate) / (1000 * 60 * 60 * 24) : Infinity;
+  const releaseDistanceDays = releaseDate
+    ? Math.abs(now - releaseDate) / (1000 * 60 * 60 * 24)
+    : Infinity;
   const recencyBoost = releaseDate > now - twoYears ? 2500 : 0;
   const currentBoost =
     normalizedQuery.length >= 5
@@ -180,7 +259,8 @@ function rankSearchSuggestions(items: SearchSuggestionCandidate[], query: string
 
     if (bScore.matchScore !== aScore.matchScore) return bScore.matchScore - aScore.matchScore;
     if (bScore.popularity !== aScore.popularity) return bScore.popularity - aScore.popularity;
-    if (bScore.recencyBoost !== aScore.recencyBoost) return bScore.recencyBoost - aScore.recencyBoost;
+    if (bScore.recencyBoost !== aScore.recencyBoost)
+      return bScore.recencyBoost - aScore.recencyBoost;
     if (bScore.releaseDate !== aScore.releaseDate) return bScore.releaseDate - aScore.releaseDate;
     if (bScore.voteAverage !== aScore.voteAverage) return bScore.voteAverage - aScore.voteAverage;
     return a.title.localeCompare(b.title);
@@ -199,9 +279,7 @@ async function searchTmdbSuggestions(query: string) {
   };
 
   const expansionQueries =
-    cacheKey.length === 4
-      ? SUGGESTION_NEXT_LETTERS.map((letter) => `${query}${letter}`)
-      : [];
+    cacheKey.length === 4 ? SUGGESTION_NEXT_LETTERS.map((letter) => `${query}${letter}`) : [];
 
   const [multi, movies, tv, ...expanded] = await Promise.all([
     tmdb<any>("/search/multi", searchParams),
@@ -218,8 +296,13 @@ async function searchTmdbSuggestions(query: string) {
 
   const seen = new Set<string>();
   const directResults = [
-    ...(multi.results ?? []).filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv"),
-    ...(movies.results ?? []).map((item: TmdbMedia) => ({ ...item, media_type: "movie" as MediaType })),
+    ...(multi.results ?? []).filter(
+      (item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv",
+    ),
+    ...(movies.results ?? []).map((item: TmdbMedia) => ({
+      ...item,
+      media_type: "movie" as MediaType,
+    })),
     ...(tv.results ?? []).map((item: TmdbMedia) => ({ ...item, media_type: "tv" as MediaType })),
   ];
 
@@ -268,6 +351,127 @@ function toSavedInput(input: any): SavedMedia {
   };
 }
 
+function toProgressInput(input: any, userId: string) {
+  return {
+    ...toSavedInput({ ...input, userId }),
+    status: WATCH_STATUSES.includes(input.status) ? input.status : "PLAN_TO_WATCH",
+    totalEpisodes: Number(input.totalEpisodes ?? 0),
+  };
+}
+
+function mapEpisode(raw: TmdbEpisode, watched?: any) {
+  return {
+    seasonNumber: raw.season_number,
+    episodeNumber: raw.episode_number,
+    name: raw.name ?? `Episode ${raw.episode_number}`,
+    overview: raw.overview ?? "",
+    airDate: raw.air_date ?? null,
+    runtime: raw.runtime ?? null,
+    stillPath: raw.still_path ?? null,
+    voteAverage: raw.vote_average ?? 0,
+    watched: Boolean(watched),
+    watchedAt: watched?.watchedAt?.getTime?.() ?? null,
+  };
+}
+
+function isEpisodeAvailable(episode: { airDate: string | null }) {
+  if (!episode.airDate) return false;
+  const airDate = new Date(episode.airDate).getTime();
+  return Number.isFinite(airDate) && airDate <= Date.now();
+}
+
+async function getSeasonRaw(tvId: number, seasonNumber: number) {
+  const key = `${tvId}:${seasonNumber}`;
+  const cached = seasonCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const data = await tmdb<any>(`/tv/${tvId}/season/${seasonNumber}`);
+  seasonCache.set(key, { expiresAt: Date.now() + 1000 * 60 * 30, data });
+  return data;
+}
+
+async function getWatchedEpisodeMap(userId: string | null, tmdbId: number) {
+  if (!userId || !hasDb()) return new Map<string, any>();
+  const docs = await EpisodeProgress.find({ userId, tmdbId });
+  return new Map(docs.map((doc: any) => [`${doc.seasonNumber}:${doc.episodeNumber}`, doc]));
+}
+
+async function getAvailableEpisodes(tvId: number) {
+  const raw = await tmdb<any>(`/tv/${tvId}`);
+  const seasons = (raw.seasons ?? [])
+    .filter((season: any) => Number(season?.season_number ?? 0) > 0)
+    .sort((a: any, b: any) => Number(a.season_number ?? 0) - Number(b.season_number ?? 0));
+
+  const seasonDetails = await Promise.all(
+    seasons.map((season: any) => getSeasonRaw(tvId, Number(season.season_number))),
+  );
+  return seasonDetails
+    .flatMap((season) => (season.episodes ?? []).map((episode: TmdbEpisode) => mapEpisode(episode)))
+    .filter(isEpisodeAvailable)
+    .sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber);
+}
+
+async function enrichWatchProgress(doc: any, includeNextEpisode = false) {
+  const watchedEpisodes =
+    doc.mediaType === "tv"
+      ? await EpisodeProgress.countDocuments({ userId: doc.userId, tmdbId: doc.tmdbId })
+      : doc.status === "COMPLETED"
+        ? 1
+        : 0;
+
+  let totalEpisodes = Number(doc.totalEpisodes ?? 0);
+  let nextEpisode = null;
+
+  if (includeNextEpisode && doc.mediaType === "tv") {
+    try {
+      const [availableEpisodes, watchedMap] = await Promise.all([
+        getAvailableEpisodes(doc.tmdbId),
+        getWatchedEpisodeMap(doc.userId, doc.tmdbId),
+      ]);
+      totalEpisodes = Math.max(totalEpisodes, availableEpisodes.length);
+      nextEpisode =
+        availableEpisodes.find(
+          (episode) => !watchedMap.has(`${episode.seasonNumber}:${episode.episodeNumber}`),
+        ) ?? null;
+    } catch {
+      nextEpisode = null;
+    }
+  }
+
+  return {
+    id: doc._id.toString(),
+    tmdbId: doc.tmdbId,
+    mediaType: doc.mediaType,
+    title: doc.title,
+    posterPath: doc.posterPath ?? null,
+    releaseDate: doc.releaseDate ?? null,
+    voteAverage: doc.voteAverage ?? 0,
+    status: doc.status,
+    totalEpisodes,
+    watchedEpisodes,
+    watchedAt: doc.watchedAt?.getTime?.() ?? null,
+    lastActivityAt: doc.lastActivityAt?.getTime?.() ?? doc.updatedAt?.getTime?.() ?? Date.now(),
+    nextEpisode,
+  };
+}
+
+async function upsertWatchProgress(input: any, userId: string, patch: Record<string, unknown>) {
+  const base = toProgressInput(input, userId);
+  const doc = await WatchProgress.findOneAndUpdate(
+    { userId, tmdbId: base.tmdbId, mediaType: base.mediaType },
+    {
+      $set: {
+        ...base,
+        ...patch,
+        lastActivityAt: new Date(),
+      },
+      $setOnInsert: { createdAt: new Date() },
+    },
+    { upsert: true, new: true },
+  );
+  return doc;
+}
+
 function mapSaved(doc: any) {
   return {
     id: doc._id.toString(),
@@ -302,7 +506,10 @@ async function connectDb() {
     });
     console.log("MongoDB connected");
   } catch (error) {
-    console.warn("MongoDB connection failed. Continuing without MongoDB-backed features.", error instanceof Error ? error.message : error);
+    console.warn(
+      "MongoDB connection failed. Continuing without MongoDB-backed features.",
+      error instanceof Error ? error.message : error,
+    );
   }
 }
 
@@ -331,9 +538,10 @@ function parseCookies(cookieHeader?: string) {
 }
 
 function getAuthUserFromRequest(request: any) {
-  const cookieHeader = typeof request?.headers?.get === "function"
-    ? request.headers.get("cookie") ?? ""
-    : request?.headers?.cookie ?? "";
+  const cookieHeader =
+    typeof request?.headers?.get === "function"
+      ? (request.headers.get("cookie") ?? "")
+      : (request?.headers?.cookie ?? "");
 
   const cookies = parseCookies(cookieHeader);
   const token = cookies[AUTH_COOKIE_NAME];
@@ -350,7 +558,9 @@ function getAuthUserFromRequest(request: any) {
 function setAuthCookie(response: any, user: { id: string; name: string; email: string }) {
   if (!response || typeof response.setHeader !== "function") return;
 
-  const token = jwt.sign({ sub: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "7d" });
+  const token = jwt.sign({ sub: user.id, email: user.email, name: user.name }, JWT_SECRET, {
+    expiresIn: "7d",
+  });
   const secureFlag = process.env.NODE_ENV === "production" ? "; Secure" : "";
   response.setHeader(
     "Set-Cookie",
@@ -381,7 +591,10 @@ function authorizeUser(context: any, userId?: string | null) {
   return user.id;
 }
 
-async function tmdb<T>(path: string, params: Record<string, string | number | boolean | undefined> = {}) {
+async function tmdb<T>(
+  path: string,
+  params: Record<string, string | number | boolean | undefined> = {},
+) {
   const key = process.env.TMDB_API_KEY;
   if (!key) throw new Error("TMDB_API_KEY missing. Set it in .env.");
 
@@ -425,6 +638,14 @@ const typeDefs = /* GraphQL */ `
   enum MediaType {
     movie
     tv
+  }
+
+  enum WatchStatus {
+    PLAN_TO_WATCH
+    WATCHING
+    COMPLETED
+    ON_HOLD
+    DROPPED
   }
 
   type MediaItem {
@@ -474,6 +695,29 @@ const typeDefs = /* GraphQL */ `
     posterPath: String
     airDate: String
     episodeCount: Int!
+  }
+
+  type Episode {
+    seasonNumber: Int!
+    episodeNumber: Int!
+    name: String!
+    overview: String!
+    airDate: String
+    runtime: Int
+    stillPath: String
+    voteAverage: Float!
+    watched: Boolean!
+    watchedAt: Float
+  }
+
+  type SeasonDetails {
+    seasonNumber: Int!
+    name: String!
+    overview: String!
+    posterPath: String
+    airDate: String
+    episodeCount: Int!
+    episodes: [Episode!]!
   }
 
   type MovieDetails {
@@ -549,6 +793,22 @@ const typeDefs = /* GraphQL */ `
     ratedAt: Float!
   }
 
+  type WatchProgress {
+    id: ID!
+    tmdbId: Int!
+    mediaType: MediaType!
+    title: String!
+    posterPath: String
+    releaseDate: String
+    voteAverage: Float!
+    status: WatchStatus!
+    totalEpisodes: Int!
+    watchedEpisodes: Int!
+    watchedAt: Float
+    lastActivityAt: Float!
+    nextEpisode: Episode
+  }
+
   input RegisterInput {
     name: String!
     email: String!
@@ -582,6 +842,56 @@ const typeDefs = /* GraphQL */ `
     rating: Int!
   }
 
+  input WatchProgressInput {
+    userId: String
+    tmdbId: Int!
+    mediaType: MediaType!
+    title: String!
+    posterPath: String
+    releaseDate: String
+    voteAverage: Float
+    status: WatchStatus!
+    totalEpisodes: Int
+  }
+
+  input EpisodeProgressInput {
+    userId: String
+    tmdbId: Int!
+    title: String!
+    posterPath: String
+    releaseDate: String
+    voteAverage: Float
+    totalEpisodes: Int
+    seasonNumber: Int!
+    episodeNumber: Int!
+    episodeTitle: String
+    airDate: String
+    runtime: Int
+    stillPath: String
+    watched: Boolean!
+  }
+
+  input SeasonEpisodeInput {
+    episodeNumber: Int!
+    episodeTitle: String
+    airDate: String
+    runtime: Int
+    stillPath: String
+  }
+
+  input SeasonProgressInput {
+    userId: String
+    tmdbId: Int!
+    title: String!
+    posterPath: String
+    releaseDate: String
+    voteAverage: Float
+    totalEpisodes: Int
+    seasonNumber: Int!
+    watched: Boolean!
+    episodes: [SeasonEpisodeInput!]!
+  }
+
   type Query {
     me: UserProfile
     home: HomeData!
@@ -593,6 +903,10 @@ const typeDefs = /* GraphQL */ `
     recommendations(media: MediaType!, id: Int!): [MediaItem!]!
     watchlist(userId: String!): [SavedItem!]!
     ratings(userId: String!): [RatingEntry!]!
+    seasonDetails(tvId: Int!, seasonNumber: Int!, userId: String): SeasonDetails!
+    watchProgress(userId: String!, tmdbId: Int!, mediaType: MediaType!): WatchProgress
+    watchProgressList(userId: String!, mediaType: MediaType, status: WatchStatus): [WatchProgress!]!
+    continueWatching(userId: String!): [WatchProgress!]!
   }
 
   type Mutation {
@@ -603,6 +917,10 @@ const typeDefs = /* GraphQL */ `
     removeWatchlist(userId: String!, tmdbId: Int!, mediaType: MediaType!): Boolean!
     rateMovie(input: RatingInput!): RatingEntry!
     removeRating(userId: String!, tmdbId: Int!, mediaType: MediaType!, seasonNumber: Int): Boolean!
+    setWatchStatus(input: WatchProgressInput!): WatchProgress!
+    removeWatchProgress(userId: String!, tmdbId: Int!, mediaType: MediaType!): Boolean!
+    setEpisodeWatched(input: EpisodeProgressInput!): WatchProgress!
+    setSeasonWatched(input: SeasonProgressInput!): WatchProgress!
   }
 `;
 
@@ -641,7 +959,9 @@ const resolvers = {
       ]);
 
       const pick = (result: any, fallback?: MediaType) =>
-        (result.results ?? []).map((item: TmdbMedia) => normalizeMedia(item, fallback)).filter((item: any) => item.posterPath);
+        (result.results ?? [])
+          .map((item: TmdbMedia) => normalizeMedia(item, fallback))
+          .filter((item: any) => item.posterPath);
 
       const sortHomeItems = (items: any[]) =>
         [...items].sort((a, b) => {
@@ -649,12 +969,15 @@ const resolvers = {
           if (popularityDelta !== 0) return popularityDelta;
           const ratingDelta = Number(b.voteAverage ?? 0) - Number(a.voteAverage ?? 0);
           if (ratingDelta !== 0) return ratingDelta;
-          const releaseDelta = (b.releaseDate ? new Date(b.releaseDate).getTime() : 0) - (a.releaseDate ? new Date(a.releaseDate).getTime() : 0);
+          const releaseDelta =
+            (b.releaseDate ? new Date(b.releaseDate).getTime() : 0) -
+            (a.releaseDate ? new Date(a.releaseDate).getTime() : 0);
           return releaseDelta;
         });
 
       const trending = sortHomeItems(pick(trendDay));
-      const featured = trending.find((item: any) => item.backdropPath && item.overview) ?? trending[0] ?? null;
+      const featured =
+        trending.find((item: any) => item.backdropPath && item.overview) ?? trending[0] ?? null;
 
       return {
         featured,
@@ -724,13 +1047,14 @@ const resolvers = {
       const externalRatings = await getOmdbRatings(imdbId);
       const providers = raw["watch/providers"]?.results ?? {};
       const regionKey = providers[process.env.TMDB_REGION ?? "DE"]
-        ? process.env.TMDB_REGION ?? "DE"
+        ? (process.env.TMDB_REGION ?? "DE")
         : providers.US
           ? "US"
           : Object.keys(providers)[0];
       const region = regionKey ? providers[regionKey] : null;
       const trailer = (raw.videos?.results ?? []).find(
-        (video: any) => video.site === "YouTube" && (video.type === "Trailer" || video.type === "Teaser"),
+        (video: any) =>
+          video.site === "YouTube" && (video.type === "Trailer" || video.type === "Teaser"),
       );
 
       let myRating: number | null = null;
@@ -739,7 +1063,12 @@ const resolvers = {
 
       if (effectiveUserId && hasDb()) {
         const [rating, saved] = await Promise.all([
-          Rating.findOne({ userId: effectiveUserId, tmdbId: args.id, mediaType: args.media, seasonNumber: null }),
+          Rating.findOne({
+            userId: effectiveUserId,
+            tmdbId: args.id,
+            mediaType: args.media,
+            seasonNumber: null,
+          }),
           WatchlistItem.exists({ userId: effectiveUserId, tmdbId: args.id, mediaType: args.media }),
         ]);
         myRating = rating?.rating ?? null;
@@ -806,23 +1135,81 @@ const resolvers = {
     watchlist: async (_: unknown, args: any, context: any) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return [];
-      return WatchlistItem.find({ userId }).sort({ createdAt: -1 }).then((docs) => docs.map(mapSaved));
+      return WatchlistItem.find({ userId })
+        .sort({ createdAt: -1 })
+        .then((docs) => docs.map(mapSaved));
     },
     ratings: async (_: unknown, args: any, context: any) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return [];
-      return Rating.find({ userId }).sort({ updatedAt: -1 }).then((docs) => docs.map(mapRating));
+      return Rating.find({ userId })
+        .sort({ updatedAt: -1 })
+        .then((docs) => docs.map(mapRating));
+    },
+    seasonDetails: async (_: unknown, args: any, context: any) => {
+      const authUser = context?.user ?? getAuthUserFromRequest(context?.request);
+      if (args.userId && authUser && args.userId !== authUser.id) {
+        throw new Error("Unauthorized.");
+      }
+
+      const watchedMap = await getWatchedEpisodeMap(authUser?.id ?? null, args.tvId);
+      const raw = await getSeasonRaw(args.tvId, args.seasonNumber);
+      const episodes = (raw.episodes ?? []).map((episode: TmdbEpisode) =>
+        mapEpisode(episode, watchedMap.get(`${episode.season_number}:${episode.episode_number}`)),
+      );
+
+      return {
+        seasonNumber: raw.season_number ?? args.seasonNumber,
+        name: raw.name ?? `Staffel ${args.seasonNumber}`,
+        overview: raw.overview ?? "",
+        posterPath: raw.poster_path ?? null,
+        airDate: raw.air_date ?? null,
+        episodeCount: episodes.length,
+        episodes,
+      };
+    },
+    watchProgress: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId);
+      if (!hasDb()) return null;
+      const doc = await WatchProgress.findOne({
+        userId,
+        tmdbId: args.tmdbId,
+        mediaType: args.mediaType,
+      });
+      return doc ? enrichWatchProgress(doc, true) : null;
+    },
+    watchProgressList: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId);
+      if (!hasDb()) return [];
+      const filter: Record<string, unknown> = { userId };
+      if (args.mediaType) filter.mediaType = args.mediaType;
+      if (args.status) filter.status = args.status;
+      const docs = await WatchProgress.find(filter).sort({ lastActivityAt: -1 });
+      return Promise.all(docs.map((doc) => enrichWatchProgress(doc, false)));
+    },
+    continueWatching: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId);
+      if (!hasDb()) return [];
+      const docs = await WatchProgress.find({ userId, mediaType: "tv", status: "WATCHING" })
+        .sort({ lastActivityAt: -1 })
+        .limit(10);
+      const progress = await Promise.all(docs.map((doc) => enrichWatchProgress(doc, true)));
+      return progress.filter((item) => item.nextEpisode);
     },
   },
   Mutation: {
     register: async (_root: unknown, args: any, context: any) => {
       assertDb();
       const name = String(args.input.name ?? "").trim();
-      const email = String(args.input.email ?? "").trim().toLowerCase();
+      const email = String(args.input.email ?? "")
+        .trim()
+        .toLowerCase();
       const password = String(args.input.password ?? "");
 
       if (!name || !email || password.length < 6) {
-        throw new Error("Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein.");
+        throw new Error(
+          "Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein.",
+        );
       }
 
       const existing = await User.findOne({ email });
@@ -839,7 +1226,9 @@ const resolvers = {
     },
     login: async (_root: unknown, args: any, context: any) => {
       assertDb();
-      const email = String(args.input.email ?? "").trim().toLowerCase();
+      const email = String(args.input.email ?? "")
+        .trim()
+        .toLowerCase();
       const password = String(args.input.password ?? "");
       const user = await User.findOne({ email });
 
@@ -886,7 +1275,12 @@ const resolvers = {
         rating: args.input.rating,
       };
       const doc = await Rating.findOneAndUpdate(
-        { userId, tmdbId: input.tmdbId, mediaType: input.mediaType, seasonNumber: input.seasonNumber ?? null },
+        {
+          userId,
+          tmdbId: input.tmdbId,
+          mediaType: input.mediaType,
+          seasonNumber: input.seasonNumber ?? null,
+        },
         { $set: input },
         { upsert: true, new: true },
       );
@@ -902,6 +1296,144 @@ const resolvers = {
         seasonNumber: args.seasonNumber ?? null,
       });
       return true;
+    },
+    setWatchStatus: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const userId = authorizeUser(context, args.input.userId ?? null);
+      const input = toProgressInput(args.input, userId);
+      const watchedAt =
+        input.mediaType === "movie" && input.status === "COMPLETED" ? new Date() : null;
+      const doc = await upsertWatchProgress(args.input, userId, {
+        status: input.status,
+        watchedAt,
+        totalEpisodes: input.totalEpisodes,
+      });
+      return enrichWatchProgress(doc, true);
+    },
+    removeWatchProgress: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const userId = authorizeUser(context, args.userId);
+      await Promise.all([
+        WatchProgress.deleteOne({ userId, tmdbId: args.tmdbId, mediaType: args.mediaType }),
+        args.mediaType === "tv"
+          ? EpisodeProgress.deleteMany({ userId, tmdbId: args.tmdbId })
+          : Promise.resolve(),
+      ]);
+      return true;
+    },
+    setEpisodeWatched: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const userId = authorizeUser(context, args.input.userId ?? null);
+      const input = args.input;
+
+      if (input.watched) {
+        await EpisodeProgress.findOneAndUpdate(
+          {
+            userId,
+            tmdbId: input.tmdbId,
+            seasonNumber: input.seasonNumber,
+            episodeNumber: input.episodeNumber,
+          },
+          {
+            $set: {
+              userId,
+              tmdbId: input.tmdbId,
+              title: input.title,
+              posterPath: input.posterPath ?? null,
+              releaseDate: input.releaseDate ?? null,
+              voteAverage: input.voteAverage ?? 0,
+              seasonNumber: input.seasonNumber,
+              episodeNumber: input.episodeNumber,
+              episodeTitle: input.episodeTitle ?? "",
+              airDate: input.airDate ?? null,
+              runtime: input.runtime ?? null,
+              stillPath: input.stillPath ?? null,
+              watchedAt: new Date(),
+            },
+          },
+          { upsert: true, new: true },
+        );
+      } else {
+        await EpisodeProgress.deleteOne({
+          userId,
+          tmdbId: input.tmdbId,
+          seasonNumber: input.seasonNumber,
+          episodeNumber: input.episodeNumber,
+        });
+      }
+
+      const watchedCount = await EpisodeProgress.countDocuments({ userId, tmdbId: input.tmdbId });
+      const totalEpisodes = Number(input.totalEpisodes ?? 0);
+      const status =
+        watchedCount > 0 && totalEpisodes > 0 && watchedCount >= totalEpisodes
+          ? "COMPLETED"
+          : "WATCHING";
+      const doc = await upsertWatchProgress(
+        { ...input, mediaType: "tv", status, totalEpisodes },
+        userId,
+        { status, totalEpisodes, watchedAt: status === "COMPLETED" ? new Date() : null },
+      );
+      return enrichWatchProgress(doc, true);
+    },
+    setSeasonWatched: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const userId = authorizeUser(context, args.input.userId ?? null);
+      const input = args.input;
+      const episodeFilters = (input.episodes ?? []).map((episode: any) => ({
+        userId,
+        tmdbId: input.tmdbId,
+        seasonNumber: input.seasonNumber,
+        episodeNumber: episode.episodeNumber,
+      }));
+
+      if (input.watched) {
+        const operations = (input.episodes ?? []).map((episode: any) => ({
+          updateOne: {
+            filter: {
+              userId,
+              tmdbId: input.tmdbId,
+              seasonNumber: input.seasonNumber,
+              episodeNumber: episode.episodeNumber,
+            },
+            update: {
+              $set: {
+                userId,
+                tmdbId: input.tmdbId,
+                title: input.title,
+                posterPath: input.posterPath ?? null,
+                releaseDate: input.releaseDate ?? null,
+                voteAverage: input.voteAverage ?? 0,
+                seasonNumber: input.seasonNumber,
+                episodeNumber: episode.episodeNumber,
+                episodeTitle: episode.episodeTitle ?? "",
+                airDate: episode.airDate ?? null,
+                runtime: episode.runtime ?? null,
+                stillPath: episode.stillPath ?? null,
+                watchedAt: new Date(),
+              },
+            },
+            upsert: true,
+          },
+        }));
+        if (operations.length) await EpisodeProgress.bulkWrite(operations);
+      } else if (episodeFilters.length) {
+        await EpisodeProgress.deleteMany({ $or: episodeFilters });
+      }
+
+      const watchedCount = await EpisodeProgress.countDocuments({ userId, tmdbId: input.tmdbId });
+      const totalEpisodes = Number(input.totalEpisodes ?? 0);
+      const status =
+        watchedCount > 0 && totalEpisodes > 0 && watchedCount >= totalEpisodes
+          ? "COMPLETED"
+          : watchedCount > 0
+            ? "WATCHING"
+            : "PLAN_TO_WATCH";
+      const doc = await upsertWatchProgress(
+        { ...input, mediaType: "tv", status, totalEpisodes },
+        userId,
+        { status, totalEpisodes, watchedAt: status === "COMPLETED" ? new Date() : null },
+      );
+      return enrichWatchProgress(doc, true);
     },
   },
 };
@@ -941,11 +1473,18 @@ app.post("/api/register", async (request, response) => {
   try {
     assertDb();
     const name = String(request.body?.name ?? "").trim();
-    const email = String(request.body?.email ?? "").trim().toLowerCase();
+    const email = String(request.body?.email ?? "")
+      .trim()
+      .toLowerCase();
     const password = String(request.body?.password ?? "");
 
     if (!name || !email || password.length < 6) {
-      response.status(400).json({ error: "Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein." });
+      response
+        .status(400)
+        .json({
+          error:
+            "Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein.",
+        });
       return;
     }
 
@@ -968,7 +1507,9 @@ app.post("/api/register", async (request, response) => {
 app.post("/api/login", async (request, response) => {
   try {
     assertDb();
-    const email = String(request.body?.email ?? "").trim().toLowerCase();
+    const email = String(request.body?.email ?? "")
+      .trim()
+      .toLowerCase();
     const password = String(request.body?.password ?? "");
     const user = await User.findOne({ email });
 
@@ -1015,6 +1556,8 @@ await connectDb();
 app.listen(PORT, () => {
   console.log(`GraphQL server running at http://localhost:${PORT}/graphql`);
   if (!hasDb()) {
-    console.warn("MongoDB is not connected; watchlist and ratings will be unavailable until a valid MONGODB_URI is configured.");
+    console.warn(
+      "MongoDB is not connected; watchlist and ratings will be unavailable until a valid MONGODB_URI is configured.",
+    );
   }
 });
