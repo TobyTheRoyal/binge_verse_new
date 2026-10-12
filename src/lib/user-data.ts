@@ -33,6 +33,44 @@ export interface WatchProgress extends SavedItem {
   nextEpisode: EpisodeInfo | null;
 }
 
+interface SavedItemResponse {
+  tmdbId: number;
+  mediaType: Media;
+  title: string;
+  posterPath: string | null;
+  releaseDate: string | null;
+  voteAverage: number;
+  addedAt?: number;
+}
+
+interface RatingResponse extends SavedItemResponse {
+  seasonNumber?: number | null;
+  rating: number;
+  ratedAt: number;
+}
+
+interface EpisodeResponse {
+  seasonNumber: number;
+  episodeNumber: number;
+  name: string;
+  overview: string;
+  airDate: string | null;
+  runtime: number | null;
+  stillPath: string | null;
+  voteAverage?: number | null;
+  watched?: boolean | null;
+  watchedAt?: number | null;
+}
+
+interface WatchProgressResponse extends SavedItemResponse {
+  status: WatchStatus;
+  totalEpisodes?: number | null;
+  watchedEpisodes?: number | null;
+  watchedAt?: number | null;
+  lastActivityAt: number;
+  nextEpisode?: EpisodeResponse | null;
+}
+
 const savedFields = `
   tmdbId
   mediaType
@@ -78,7 +116,7 @@ const progressFields = `
   nextEpisode { ${episodeFields} }
 `;
 
-function fromSaved(raw: any): SavedItem {
+function fromSaved(raw: SavedItemResponse): SavedItem {
   return {
     id: raw.tmdbId,
     media_type: raw.mediaType,
@@ -86,7 +124,7 @@ function fromSaved(raw: any): SavedItem {
     poster_path: raw.posterPath,
     release_date: raw.releaseDate,
     vote_average: raw.voteAverage,
-    addedAt: raw.addedAt,
+    addedAt: raw.addedAt ?? 0,
   };
 }
 
@@ -102,6 +140,18 @@ function toInput(userId: string, item: Omit<SavedItem, "addedAt">) {
   };
 }
 
+function toSeriesProgressInput(userId: string, item: Omit<SavedItem, "addedAt">) {
+  const base = toInput(userId, item);
+  return {
+    userId: base.userId,
+    tmdbId: base.tmdbId,
+    title: base.title,
+    posterPath: base.posterPath,
+    releaseDate: base.releaseDate,
+    voteAverage: base.voteAverage,
+  };
+}
+
 function toRatingInput(userId: string, item: Omit<RatingEntry, "ratedAt" | "addedAt">) {
   return {
     ...toInput(userId, item),
@@ -110,7 +160,7 @@ function toRatingInput(userId: string, item: Omit<RatingEntry, "ratedAt" | "adde
   };
 }
 
-function fromEpisode(raw: any): EpisodeInfo {
+function fromEpisode(raw: EpisodeResponse): EpisodeInfo {
   return {
     season_number: raw.seasonNumber,
     episode_number: raw.episodeNumber,
@@ -125,7 +175,7 @@ function fromEpisode(raw: any): EpisodeInfo {
   };
 }
 
-function fromProgress(raw: any): WatchProgress {
+function fromProgress(raw: WatchProgressResponse): WatchProgress {
   return {
     ...fromSaved(raw),
     status: raw.status,
@@ -157,7 +207,7 @@ export function useWatchlist() {
     queryKey,
     enabled: Boolean(user),
     queryFn: async () => {
-      const data = await graphqlClient.request<any>(
+      const data = await graphqlClient.request<{ watchlist: SavedItemResponse[] }>(
         `
           query Watchlist($userId: String!) {
             watchlist(userId: $userId) { ${savedFields} }
@@ -229,7 +279,7 @@ export function useRatings() {
     queryKey,
     enabled: Boolean(user),
     queryFn: async () => {
-      const data = await graphqlClient.request<any>(
+      const data = await graphqlClient.request<{ ratings: RatingResponse[] }>(
         `
           query Ratings($userId: String!) {
             ratings(userId: $userId) { ${ratingFields} }
@@ -237,7 +287,7 @@ export function useRatings() {
         `,
         { userId: user!.id },
       );
-      return data.ratings.map((entry: any) => ({
+      return data.ratings.map((entry) => ({
         ...fromSaved(entry),
         seasonNumber: entry.seasonNumber ?? null,
         rating: entry.rating,
@@ -310,7 +360,7 @@ export function useWatchProgress(id?: number, media_type?: Media) {
     queryKey,
     enabled: Boolean(user && id && media_type),
     queryFn: async () => {
-      const data = await graphqlClient.request<any>(
+      const data = await graphqlClient.request<{ watchProgress: WatchProgressResponse | null }>(
         `
           query WatchProgress($userId: String!, $tmdbId: Int!, $mediaType: MediaType!) {
             watchProgress(userId: $userId, tmdbId: $tmdbId, mediaType: $mediaType) { ${progressFields} }
@@ -333,7 +383,7 @@ export function useWatchProgress(id?: number, media_type?: Media) {
     mutationFn: async (
       item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
     ) => {
-      const data = await graphqlClient.request<any>(
+      const data = await graphqlClient.request<{ setWatchStatus: WatchProgressResponse }>(
         `
           mutation SetWatchStatus($input: WatchProgressInput!) {
             setWatchStatus(input: $input) { ${progressFields} }
@@ -358,7 +408,8 @@ export function useWatchProgress(id?: number, media_type?: Media) {
       watched: boolean;
       totalEpisodes?: number;
     }) => {
-      const data = await graphqlClient.request<any>(
+      const baseInput = toSeriesProgressInput(user!.id, item);
+      const data = await graphqlClient.request<{ setEpisodeWatched: WatchProgressResponse }>(
         `
           mutation SetEpisodeWatched($input: EpisodeProgressInput!) {
             setEpisodeWatched(input: $input) { ${progressFields} }
@@ -366,7 +417,7 @@ export function useWatchProgress(id?: number, media_type?: Media) {
         `,
         {
           input: {
-            ...toInput(user!.id, item),
+            ...baseInput,
             totalEpisodes: totalEpisodes ?? 0,
             seasonNumber: episode.season_number,
             episodeNumber: episode.episode_number,
@@ -397,7 +448,8 @@ export function useWatchProgress(id?: number, media_type?: Media) {
       watched: boolean;
       totalEpisodes?: number;
     }) => {
-      const data = await graphqlClient.request<any>(
+      const baseInput = toSeriesProgressInput(user!.id, item);
+      const data = await graphqlClient.request<{ setSeasonWatched: WatchProgressResponse }>(
         `
           mutation SetSeasonWatched($input: SeasonProgressInput!) {
             setSeasonWatched(input: $input) { ${progressFields} }
@@ -405,7 +457,7 @@ export function useWatchProgress(id?: number, media_type?: Media) {
         `,
         {
           input: {
-            ...toInput(user!.id, item),
+            ...baseInput,
             totalEpisodes: totalEpisodes ?? 0,
             seasonNumber,
             watched,
@@ -461,7 +513,7 @@ export function useWatchProgressList() {
     queryKey,
     enabled: Boolean(user),
     queryFn: async () => {
-      const data = await graphqlClient.request<any>(
+      const data = await graphqlClient.request<{ watchProgressList: WatchProgressResponse[] }>(
         `
           query WatchProgressList($userId: String!) {
             watchProgressList(userId: $userId) { ${progressFields} }
@@ -490,7 +542,7 @@ export function useWatchProgressActions() {
     mutationFn: async (
       item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
     ) => {
-      const data = await graphqlClient.request<any>(
+      const data = await graphqlClient.request<{ setWatchStatus: WatchProgressResponse }>(
         `
           mutation SetWatchStatus($input: WatchProgressInput!) {
             setWatchStatus(input: $input) { ${progressFields} }
@@ -531,7 +583,7 @@ export function useContinueWatching() {
     queryKey: ["continue-watching", user?.id],
     enabled: Boolean(user),
     queryFn: async () => {
-      const data = await graphqlClient.request<any>(
+      const data = await graphqlClient.request<{ continueWatching: WatchProgressResponse[] }>(
         `
           query ContinueWatching($userId: String!) {
             continueWatching(userId: $userId) { ${progressFields} }
