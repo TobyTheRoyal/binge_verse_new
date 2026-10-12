@@ -307,7 +307,47 @@ export function useRatings() {
         { input: toRatingInput(user!.id, item) },
       );
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onMutate: async (item) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<RatingEntry[]>(queryKey);
+      const now = Date.now();
+      const optimistic: RatingEntry = {
+        ...item,
+        seasonNumber: item.seasonNumber ?? null,
+        addedAt: now,
+        ratedAt: now,
+      };
+
+      queryClient.setQueryData<RatingEntry[]>(queryKey, (current = []) => [
+        ...current.filter(
+          (entry) =>
+            !(
+              entry.id === item.id &&
+              entry.media_type === item.media_type &&
+              (item.seasonNumber == null
+                ? entry.seasonNumber == null
+                : entry.seasonNumber === item.seasonNumber)
+            ),
+        ),
+        optimistic,
+      ]);
+      queryClient.setQueryData<SavedItem[]>(["watchlist", user?.id], (current = []) =>
+        current.filter((entry) => !(entry.id === item.id && entry.media_type === item.media_type)),
+      );
+
+      return { previous };
+    },
+    onError: (_error, _item, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["season-details"] });
+    },
   });
 
   const removeMutation = useMutation({
@@ -325,7 +365,36 @@ export function useRatings() {
         { userId: user!.id, tmdbId: id, mediaType: media_type, seasonNumber: seasonNumber ?? null },
       );
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onMutate: async ({ id, media_type, seasonNumber }) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<RatingEntry[]>(queryKey);
+
+      queryClient.setQueryData<RatingEntry[]>(queryKey, (current = []) =>
+        current.filter(
+          (entry) =>
+            !(
+              entry.id === id &&
+              entry.media_type === media_type &&
+              (seasonNumber == null
+                ? entry.seasonNumber == null
+                : entry.seasonNumber === seasonNumber)
+            ),
+        ),
+      );
+
+      return { previous };
+    },
+    onError: (_error, _item, context) => {
+      if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["season-details"] });
+    },
   });
 
   const items = useMemo(() => query.data ?? [], [query.data]);
@@ -376,6 +445,7 @@ export function useWatchProgress(id?: number, media_type?: Media) {
     queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
     queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
     queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
     queryClient.invalidateQueries({ queryKey: ["season-details"] });
   };
 
@@ -536,6 +606,7 @@ export function useWatchProgressActions() {
     queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
     queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
     queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
   };
 
   const setStatusMutation = useMutation({

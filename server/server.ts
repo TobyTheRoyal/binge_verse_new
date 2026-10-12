@@ -75,7 +75,7 @@ const ratingSchema = new Schema(
     posterPath: { type: String, default: null },
     releaseDate: { type: String, default: null },
     voteAverage: { type: Number, default: 0 },
-    rating: { type: Number, required: true, min: 1, max: 10 },
+    rating: { type: Number, required: true, min: 0.5, max: 10 },
   },
   { timestamps: true },
 );
@@ -494,6 +494,118 @@ function mapRating(doc: any) {
   };
 }
 
+function normalizeUserRating(value: unknown) {
+  const rating = Math.round(Number(value) * 2) / 2;
+  if (!Number.isFinite(rating) || rating < 0.5 || rating > 10) {
+    throw new Error("Bewertung muss zwischen 0.5 und 10 liegen.");
+  }
+  return rating;
+}
+
+function averageRating(values: number[]) {
+  if (!values.length) return null;
+  return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+}
+
+async function syncSeriesRatingFromSeasons(userId: string, tmdbId: number) {
+  const seasonRatings = await Rating.find({
+    userId,
+    tmdbId,
+    mediaType: "tv",
+    seasonNumber: { $ne: null },
+  }).sort({ seasonNumber: 1 });
+
+  const rating = averageRating(seasonRatings.map((entry: any) => Number(entry.rating)));
+  if (rating == null) {
+    await Rating.deleteOne({ userId, tmdbId, mediaType: "tv", seasonNumber: null });
+    return null;
+  }
+
+  const source = seasonRatings[0];
+  return Rating.findOneAndUpdate(
+    { userId, tmdbId, mediaType: "tv", seasonNumber: null },
+    {
+      $set: {
+        userId,
+        tmdbId,
+        mediaType: "tv",
+        seasonNumber: null,
+        title: source.title,
+        posterPath: source.posterPath ?? null,
+        releaseDate: source.releaseDate ?? null,
+        voteAverage: source.voteAverage ?? 0,
+        rating,
+      },
+    },
+    { upsert: true, new: true },
+  );
+}
+
+async function markMovieCompletedFromRating(input: any, userId: string) {
+  return upsertWatchProgress({ ...input, status: "COMPLETED", totalEpisodes: 1 }, userId, {
+    status: "COMPLETED",
+    totalEpisodes: 1,
+    watchedAt: new Date(),
+  });
+}
+
+async function markSeasonCompletedFromRating(input: any, userId: string) {
+  const seasonNumber = Number(input.seasonNumber);
+  if (!Number.isFinite(seasonNumber)) return null;
+
+  const [seasonRaw, availableEpisodes] = await Promise.all([
+    getSeasonRaw(Number(input.tmdbId), seasonNumber),
+    getAvailableEpisodes(Number(input.tmdbId)),
+  ]);
+  const seasonEpisodes = ((seasonRaw.episodes ?? []) as TmdbEpisode[])
+    .map((episode: TmdbEpisode) => mapEpisode(episode))
+    .filter(isEpisodeAvailable);
+
+  const watchedAt = new Date();
+  const operations = seasonEpisodes.map((episode) => ({
+    updateOne: {
+      filter: {
+        userId,
+        tmdbId: input.tmdbId,
+        seasonNumber,
+        episodeNumber: episode.episodeNumber,
+      },
+      update: {
+        $set: {
+          userId,
+          tmdbId: input.tmdbId,
+          title: input.title,
+          posterPath: input.posterPath ?? null,
+          releaseDate: input.releaseDate ?? null,
+          voteAverage: input.voteAverage ?? 0,
+          seasonNumber,
+          episodeNumber: episode.episodeNumber,
+          episodeTitle: episode.name,
+          airDate: episode.airDate ?? null,
+          runtime: episode.runtime ?? null,
+          stillPath: episode.stillPath ?? null,
+          watchedAt,
+        },
+      },
+      upsert: true,
+    },
+  }));
+  if (operations.length) await EpisodeProgress.bulkWrite(operations);
+
+  const watchedCount = await EpisodeProgress.countDocuments({ userId, tmdbId: input.tmdbId });
+  const totalEpisodes = availableEpisodes.length;
+  const status =
+    watchedCount > 0 && totalEpisodes > 0 && watchedCount >= totalEpisodes
+      ? "COMPLETED"
+      : "WATCHING";
+
+  return upsertWatchProgress({ ...input, mediaType: "tv", status, totalEpisodes }, userId, {
+    status,
+    totalEpisodes,
+    watchedAt: status === "COMPLETED" ? watchedAt : null,
+  });
+}
+
 async function connectDb() {
   if (!process.env.MONGODB_URI) {
     console.warn("MONGODB_URI missing. TMDB queries work, MongoDB user data is disabled.");
@@ -743,7 +855,7 @@ const typeDefs = /* GraphQL */ `
     recommendations: [MediaItem!]!
     watchProviders: WatchProviders
     trailerKey: String
-    myRating: Int
+    myRating: Float
     inWatchlist: Boolean!
   }
 
@@ -789,7 +901,7 @@ const typeDefs = /* GraphQL */ `
     releaseDate: String
     voteAverage: Float!
     addedAt: Float!
-    rating: Int!
+    rating: Float!
     ratedAt: Float!
   }
 
@@ -839,7 +951,7 @@ const typeDefs = /* GraphQL */ `
     posterPath: String
     releaseDate: String
     voteAverage: Float
-    rating: Int!
+    rating: Float!
   }
 
   input WatchProgressInput {
@@ -1272,7 +1384,7 @@ const resolvers = {
       const input = {
         ...toSavedInput({ ...args.input, userId }),
         seasonNumber: args.input.seasonNumber ?? null,
-        rating: args.input.rating,
+        rating: normalizeUserRating(args.input.rating),
       };
       const doc = await Rating.findOneAndUpdate(
         {
@@ -1284,6 +1396,27 @@ const resolvers = {
         { $set: input },
         { upsert: true, new: true },
       );
+
+      await WatchlistItem.deleteOne({
+        userId,
+        tmdbId: input.tmdbId,
+        mediaType: input.mediaType,
+      });
+
+      if (input.mediaType === "movie") {
+        await markMovieCompletedFromRating(input, userId);
+      } else if (input.seasonNumber != null) {
+        await Promise.all([
+          syncSeriesRatingFromSeasons(userId, input.tmdbId),
+          markSeasonCompletedFromRating(input, userId),
+        ]);
+      } else {
+        await upsertWatchProgress({ ...input, status: "COMPLETED", totalEpisodes: 0 }, userId, {
+          status: "COMPLETED",
+          watchedAt: new Date(),
+        });
+      }
+
       return mapRating(doc);
     },
     removeRating: async (_: unknown, args: any, context: any) => {
@@ -1295,6 +1428,9 @@ const resolvers = {
         mediaType: args.mediaType,
         seasonNumber: args.seasonNumber ?? null,
       });
+      if (args.mediaType === "tv" && args.seasonNumber != null) {
+        await syncSeriesRatingFromSeasons(userId, args.tmdbId);
+      }
       return true;
     },
     setWatchStatus: async (_: unknown, args: any, context: any) => {
@@ -1308,6 +1444,13 @@ const resolvers = {
         watchedAt,
         totalEpisodes: input.totalEpisodes,
       });
+      if (input.status === "COMPLETED") {
+        await WatchlistItem.deleteOne({
+          userId,
+          tmdbId: input.tmdbId,
+          mediaType: input.mediaType,
+        });
+      }
       return enrichWatchProgress(doc, true);
     },
     removeWatchProgress: async (_: unknown, args: any, context: any) => {
@@ -1479,12 +1622,10 @@ app.post("/api/register", async (request, response) => {
     const password = String(request.body?.password ?? "");
 
     if (!name || !email || password.length < 6) {
-      response
-        .status(400)
-        .json({
-          error:
-            "Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein.",
-        });
+      response.status(400).json({
+        error:
+          "Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein.",
+      });
       return;
     }
 

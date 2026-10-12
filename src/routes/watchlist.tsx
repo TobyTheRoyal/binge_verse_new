@@ -11,11 +11,11 @@ import {
 import { Link } from "@/lib/navigation";
 
 const STATUS_LABELS: Record<WatchStatus, string> = {
-  PLAN_TO_WATCH: "Plan to Watch",
-  WATCHING: "Watching",
-  COMPLETED: "Completed",
-  ON_HOLD: "On Hold",
-  DROPPED: "Dropped",
+  PLAN_TO_WATCH: "Geplant",
+  WATCHING: "Angefangen",
+  COMPLETED: "Abgeschlossen",
+  ON_HOLD: "Pausiert",
+  DROPPED: "Abgebrochen",
 };
 
 export function WatchlistPage() {

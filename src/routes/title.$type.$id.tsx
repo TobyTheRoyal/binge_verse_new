@@ -20,11 +20,11 @@ import { useWatchlist, useRatings, useWatchProgress, type WatchStatus } from "@/
 import { Link } from "@/lib/navigation";
 
 const STATUS_LABELS: Record<WatchStatus, string> = {
-  PLAN_TO_WATCH: "Plan to Watch",
-  WATCHING: "Watching",
-  COMPLETED: "Completed",
-  ON_HOLD: "On Hold",
-  DROPPED: "Dropped",
+  PLAN_TO_WATCH: "Geplant",
+  WATCHING: "Angefangen",
+  COMPLETED: "Abgeschlossen",
+  ON_HOLD: "Pausiert",
+  DROPPED: "Abgebrochen",
 };
 
 function progressPercent(watched: number, total: number) {
@@ -36,6 +36,75 @@ function isAvailable(episode: EpisodeInfo) {
   if (!episode.air_date) return false;
   const airDate = new Date(episode.air_date).getTime();
   return Number.isFinite(airDate) && airDate <= Date.now();
+}
+
+function formatRating(rating: number) {
+  if (!rating) return "–";
+  return Number.isInteger(rating) ? String(rating) : rating.toFixed(1);
+}
+
+function RatingStars({
+  currentRating,
+  onRate,
+  ariaPrefix,
+  starClassName = "size-5",
+}: {
+  currentRating: number;
+  onRate?: (rating: number) => void;
+  ariaPrefix: string;
+  starClassName?: string;
+}) {
+  const [hover, setHover] = useState(0);
+  const displayRating = hover || currentRating;
+
+  return (
+    <div className="flex items-center gap-0.5" onMouseLeave={() => setHover(0)}>
+      {Array.from({ length: 10 }, (_, index) => {
+        const halfRating = index + 0.5;
+        const fullRating = index + 1;
+        const fill = Math.max(0, Math.min(1, displayRating - index)) * 100;
+
+        return (
+          <div key={fullRating} className={`relative shrink-0 ${starClassName}`}>
+            <Star
+              className={`absolute inset-0 ${starClassName} text-muted-foreground/35`}
+              aria-hidden="true"
+            />
+            <span
+              className="pointer-events-none absolute inset-0 overflow-hidden text-[var(--color-gold)]"
+              style={{ width: `${fill}%` }}
+              aria-hidden="true"
+            >
+              <Star className={`${starClassName} fill-[var(--color-gold)]`} />
+            </span>
+            {onRate && (
+              <>
+                <button
+                  type="button"
+                  onMouseEnter={() => setHover(halfRating)}
+                  onFocus={() => setHover(halfRating)}
+                  onClick={() => onRate(halfRating)}
+                  className="absolute inset-y-0 left-0 z-10 w-1/2 rounded-l-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  aria-label={`${ariaPrefix}: ${halfRating} von 10 Sternen`}
+                />
+                <button
+                  type="button"
+                  onMouseEnter={() => setHover(fullRating)}
+                  onFocus={() => setHover(fullRating)}
+                  onClick={() => onRate(fullRating)}
+                  className="absolute inset-y-0 right-0 z-10 w-1/2 rounded-r-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  aria-label={`${ariaPrefix}: ${fullRating} von 10 Sternen`}
+                />
+              </>
+            )}
+          </div>
+        );
+      })}
+      <span className="ml-3 min-w-[4ch] text-sm font-bold text-[var(--color-gold)]">
+        {formatRating(displayRating)}/10
+      </span>
+    </div>
+  );
 }
 
 function SeasonRatingCard({
@@ -53,8 +122,6 @@ function SeasonRatingCard({
   onRate: (rating: number) => void;
   onRemove: () => void;
 }) {
-  const [hover, setHover] = useState(0);
-
   return (
     <div className="rounded-2xl border border-border bg-surface/80 p-3 shadow-sm">
       <div className="mb-3 flex items-center gap-3">
@@ -87,27 +154,12 @@ function SeasonRatingCard({
         )}
       </div>
 
-      <div className="flex items-center gap-1" onMouseLeave={() => setHover(0)}>
-        {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => {
-          const active = (hover || currentRating) >= n;
-          return (
-            <button
-              key={n}
-              onMouseEnter={() => setHover(n)}
-              onClick={() => onRate(n)}
-              className="p-0.5 transition-transform hover:scale-110"
-              aria-label={`Staffel ${seasonNumber}: ${n} von 10 Sternen`}
-            >
-              <Star
-                className={`size-4 transition-colors ${active ? "text-[var(--color-gold)] fill-[var(--color-gold)]" : "text-muted-foreground/35"}`}
-              />
-            </button>
-          );
-        })}
-        <span className="ml-2 min-w-[3ch] text-sm font-bold text-[var(--color-gold)]">
-          {hover || currentRating || "–"}
-        </span>
-      </div>
+      <RatingStars
+        currentRating={currentRating}
+        onRate={onRate}
+        ariaPrefix={`Staffel ${seasonNumber}`}
+        starClassName="size-4"
+      />
     </div>
   );
 }
@@ -118,7 +170,6 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
   const { getRating, setRating, removeRating } = useRatings();
   const { progress, setStatus, setEpisodeWatched, setSeasonWatched, removeProgress, updating } =
     useWatchProgress(id, media);
-  const [hover, setHover] = useState(0);
   const [activeSeason, setActiveSeason] = useState<number | null>(null);
   const {
     data: d,
@@ -173,6 +224,15 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
             rating: getRating(d.id, d.media_type, season.season_number),
           }))
       : [];
+  const ratedSeasonCards = seasonCards.filter((season) => season.rating > 0);
+  const computedSeriesRating = ratedSeasonCards.length
+    ? Math.round(
+        (ratedSeasonCards.reduce((sum, season) => sum + season.rating, 0) /
+          ratedSeasonCards.length) *
+          10,
+      ) / 10
+    : 0;
+  const displayedRating = media === "tv" ? computedSeriesRating || myRating : myRating;
   const item = {
     id: d.id,
     media_type: d.media_type,
@@ -235,10 +295,12 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
               </div>
 
               <div className="flex flex-wrap items-center gap-4 text-sm">
-                {myRating > 0 && (
+                {displayedRating > 0 && (
                   <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--color-gold)]/15 border border-[var(--color-gold)]/30">
                     <Star className="size-4 text-[var(--color-gold)] fill-[var(--color-gold)]" />
-                    <span className="font-bold text-[var(--color-gold)]">{myRating}</span>
+                    <span className="font-bold text-[var(--color-gold)]">
+                      {formatRating(displayedRating)}
+                    </span>
                     <span className="text-muted-foreground text-xs">Meine Bewertung</span>
                   </div>
                 )}
@@ -389,9 +451,9 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                 <div className="bg-surface border border-border rounded-2xl p-4 max-w-md">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-bold">
-                      {media === "tv" ? "Gesamtbewertung der Serie" : "Deine Bewertung"}
+                      {media === "tv" ? "Serienbewertung aus Staffeln" : "Deine Bewertung"}
                     </h3>
-                    {myRating > 0 && (
+                    {media === "movie" && myRating > 0 && (
                       <button
                         onClick={() => removeRating(d.id, d.media_type)}
                         className="text-xs text-muted-foreground hover:text-destructive"
@@ -400,14 +462,12 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                       </button>
                     )}
                   </div>
-                  <div className="flex items-center gap-0.5" onMouseLeave={() => setHover(0)}>
-                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => {
-                      const active = (hover || myRating) >= n;
-                      return (
-                        <button
-                          key={n}
-                          onMouseEnter={() => setHover(n)}
-                          onClick={() =>
+                  <RatingStars
+                    currentRating={displayedRating}
+                    ariaPrefix={media === "tv" ? "Serienbewertung" : "Deine Bewertung"}
+                    onRate={
+                      media === "movie"
+                        ? (rating) => {
                             setRating({
                               id: d.id,
                               media_type: d.media_type,
@@ -415,22 +475,24 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                               poster_path: d.poster_path,
                               release_date: d.release_date,
                               vote_average: d.vote_average,
-                              rating: n,
-                            })
+                              rating,
+                            });
+                            setStatus({
+                              ...item,
+                              status: "COMPLETED",
+                              totalEpisodes: 1,
+                            });
                           }
-                          className="p-1 transition-transform hover:scale-110"
-                          aria-label={`${n} Sterne`}
-                        >
-                          <Star
-                            className={`size-5 transition-colors ${active ? "text-[var(--color-gold)] fill-[var(--color-gold)]" : "text-muted-foreground/40"}`}
-                          />
-                        </button>
-                      );
-                    })}
-                    <span className="ml-3 text-sm font-bold text-[var(--color-gold)] min-w-[3ch]">
-                      {hover || myRating || "–"}/10
-                    </span>
-                  </div>
+                        : undefined
+                    }
+                  />
+                  {media === "tv" && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {ratedSeasonCards.length
+                        ? `Durchschnitt aus ${ratedSeasonCards.length} Staffelbewertung${ratedSeasonCards.length === 1 ? "" : "en"}.`
+                        : "Bewerte eine Staffel, um die Serienbewertung zu setzen."}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -452,7 +514,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                     seasonName={season.seasonName}
                     posterPath={season.posterPath}
                     currentRating={season.rating}
-                    onRate={(rating) =>
+                    onRate={(rating) => {
                       setRating({
                         id: d.id,
                         media_type: d.media_type,
@@ -462,8 +524,17 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                         vote_average: d.vote_average,
                         seasonNumber: season.seasonNumber,
                         rating,
-                      })
-                    }
+                      });
+                      if (seasonQ.data?.season_number === season.seasonNumber) {
+                        setSeasonWatched({
+                          item,
+                          seasonNumber: season.seasonNumber,
+                          episodes: seasonQ.data.episodes.filter(isAvailable),
+                          watched: true,
+                          totalEpisodes,
+                        });
+                      }
+                    }}
                     onRemove={() => removeRating(d.id, d.media_type, season.seasonNumber)}
                   />
                 ))}

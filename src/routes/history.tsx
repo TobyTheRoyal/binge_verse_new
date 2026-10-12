@@ -11,11 +11,11 @@ import {
 import { Link } from "@/lib/navigation";
 
 const STATUS_LABELS: Record<WatchStatus, string> = {
-  PLAN_TO_WATCH: "Plan to Watch",
-  WATCHING: "Watching",
-  COMPLETED: "Completed",
-  ON_HOLD: "On Hold",
-  DROPPED: "Dropped",
+  PLAN_TO_WATCH: "Geplant",
+  WATCHING: "Angefangen",
+  COMPLETED: "Abgeschlossen",
+  ON_HOLD: "Pausiert",
+  DROPPED: "Abgebrochen",
 };
 
 export function HistoryPage() {
@@ -41,7 +41,9 @@ export function HistoryPage() {
   const viewing = useMemo(() => {
     const arr =
       filter === "all" ? progressItems : progressItems.filter((x) => x.media_type === filter);
-    return [...arr].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    return [...arr]
+      .filter((item) => item.status !== "COMPLETED" && item.status !== "PLAN_TO_WATCH")
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
   }, [progressItems, filter]);
 
   if (!user) {
@@ -72,7 +74,8 @@ export function HistoryPage() {
             Bewertungs-Historie
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {viewing.length} Watch-Einträge · {items.length} Bewertungen · Ø {avg.toFixed(1)}/10
+            {viewing.length} offene Fortschritte · {items.length} Bewertungen · Ø {avg.toFixed(1)}
+            /10
           </p>
         </div>
       </div>
@@ -114,14 +117,15 @@ export function HistoryPage() {
 
       <section className="space-y-4">
         <div>
-          <h2 className="text-2xl font-extrabold tracking-tight">Gesehen & Fortschritt</h2>
+          <h2 className="text-2xl font-extrabold tracking-tight">Offene Fortschritte</h2>
           <p className="text-sm text-muted-foreground">
-            Getrennt von Bewertungen. Filme können hier als gesehen stehen, ohne bewertet zu sein.
+            Angefangene, pausierte oder abgebrochene Titel. Abgeschlossene Titel stehen bei deinen
+            Bewertungen.
           </p>
         </div>
 
         {viewing.length === 0 ? (
-          <div className="py-12 text-center text-muted-foreground">Noch keine Watch-Aktivität.</div>
+          <div className="py-12 text-center text-muted-foreground">Keine offenen Fortschritte.</div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {viewing.map((it) => {

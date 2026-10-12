@@ -67,6 +67,73 @@ assert.equal(movieStatus.data.setWatchStatus.status, "COMPLETED");
 assert.equal(movieStatus.data.setWatchStatus.watchedEpisodes, 1);
 assert.ok(movieStatus.data.setWatchStatus.watchedAt);
 
+const ratedMovieInput = {
+  userId,
+  tmdbId: 13,
+  mediaType: "movie",
+  title: "Forrest Gump",
+  posterPath: null,
+  releaseDate: "1994-06-23",
+  voteAverage: 8.5,
+  rating: 8.5,
+};
+
+await graphql(
+  `
+    mutation AddWatchlist($input: SavedItemInput!) {
+      addWatchlist(input: $input) {
+        tmdbId
+      }
+    }
+  `,
+  { input: { ...ratedMovieInput, rating: undefined } },
+);
+
+const movieRating = await graphql(
+  `
+    mutation RateMovie($input: RatingInput!) {
+      rateMovie(input: $input) {
+        tmdbId
+        mediaType
+        rating
+      }
+    }
+  `,
+  { input: ratedMovieInput },
+);
+
+assert.equal(movieRating.data.rateMovie.rating, 8.5);
+
+const watchlistAfterRating = await graphql(
+  `
+    query Watchlist($userId: String!) {
+      watchlist(userId: $userId) {
+        tmdbId
+      }
+    }
+  `,
+  { userId },
+);
+assert.equal(
+  watchlistAfterRating.data.watchlist.some((item) => item.tmdbId === ratedMovieInput.tmdbId),
+  false,
+);
+
+const ratedMovieProgress = await graphql(
+  `
+    query WatchProgress($userId: String!) {
+      watchProgress(userId: $userId, tmdbId: 13, mediaType: movie) {
+        status
+        watchedEpisodes
+      }
+    }
+  `,
+  { userId },
+);
+
+assert.equal(ratedMovieProgress.data.watchProgress.status, "COMPLETED");
+assert.equal(ratedMovieProgress.data.watchProgress.watchedEpisodes, 1);
+
 const tvInput = {
   userId,
   tmdbId: 1396,
@@ -116,12 +183,21 @@ const list = await graphql(
   { userId },
 );
 
-assert.equal(list.data.watchProgressList.length, 2);
+assert.equal(list.data.watchProgressList.length, 3);
 
 await graphql(
   `
     mutation RemoveMovie($userId: String!) {
       removeWatchProgress(userId: $userId, tmdbId: 550, mediaType: movie)
+    }
+  `,
+  { userId },
+);
+
+await graphql(
+  `
+    mutation RemoveRatedMovie($userId: String!) {
+      removeWatchProgress(userId: $userId, tmdbId: 13, mediaType: movie)
     }
   `,
   { userId },
