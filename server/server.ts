@@ -3,6 +3,7 @@ import "dotenv/config";
 import bcrypt from "bcryptjs";
 import cors from "cors";
 import express from "express";
+import type { RequestHandler } from "express";
 import { createSchema, createYoga } from "graphql-yoga";
 import jwt from "jsonwebtoken";
 import mongoose, { Schema } from "mongoose";
@@ -12,6 +13,8 @@ const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const AUTH_COOKIE_NAME = "bingeverse_session";
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-me";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+const SUGGESTION_CACHE_TTL_MS = 1000 * 60 * 5;
+const SUGGESTION_NEXT_LETTERS = ["a", "e", "i", "o", "u", "r", "s", "t", "l", "n", "m", "h", "d"];
 
 type MediaType = "movie" | "tv";
 
@@ -92,6 +95,165 @@ function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
     voteCount: raw.vote_count ?? 0,
     genreIds: raw.genre_ids ?? [],
   };
+}
+
+type NormalizedMedia = ReturnType<typeof normalizeMedia>;
+type SearchSuggestionCandidate = NormalizedMedia & { suggestionSourceRank?: number };
+
+const suggestionCache = new Map<string, { expiresAt: number; items: SearchSuggestionCandidate[] }>();
+
+function normalizedSearchText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleWithoutLeadingArticle(title: string) {
+  return normalizedSearchText(title).replace(/^(the|a|an|der|die|das|ein|eine)\s+/, "");
+}
+
+function dateScore(date: string | null) {
+  const parsed = date ? new Date(date).getTime() : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function scoreSearchSuggestion(item: SearchSuggestionCandidate, query: string) {
+  const normalizedQuery = normalizedSearchText(query);
+  const title = normalizedSearchText(item.title);
+  const titleWithoutArticle = titleWithoutLeadingArticle(item.title);
+  const overview = normalizedSearchText(item.overview ?? "");
+  const queryWords = normalizedQuery.split(/\s+/).filter(Boolean);
+  const titleWords = `${title} ${titleWithoutArticle}`.split(/\s+/).filter(Boolean);
+
+  let matchScore = 0;
+
+  if (title === normalizedQuery || titleWithoutArticle === normalizedQuery) matchScore += 180000;
+  if (title.startsWith(normalizedQuery) || titleWithoutArticle.startsWith(normalizedQuery)) matchScore += 150000;
+  if (title.includes(normalizedQuery) || titleWithoutArticle.includes(normalizedQuery)) matchScore += 110000;
+
+  for (const word of queryWords) {
+    if (titleWords.includes(word)) matchScore += 12000;
+    if (titleWords.some((titleWord) => titleWord.startsWith(word))) matchScore += 26000;
+    if (titleWords.some((titleWord) => titleWord.includes(word))) matchScore += 14000;
+  }
+
+  if (matchScore === 0 && overview.includes(normalizedQuery)) matchScore += 250;
+
+  const releaseDate = dateScore(item.releaseDate);
+  const now = Date.now();
+  const twoYears = 1000 * 60 * 60 * 24 * 365 * 2;
+  const releaseDistanceDays = releaseDate ? Math.abs(now - releaseDate) / (1000 * 60 * 60 * 24) : Infinity;
+  const recencyBoost = releaseDate > now - twoYears ? 2500 : 0;
+  const currentBoost =
+    normalizedQuery.length >= 5
+      ? releaseDistanceDays <= 60
+        ? 70000
+        : releaseDate > now - twoYears
+          ? 15000
+          : 0
+      : 0;
+  const popularity = Number(item.popularity ?? 0);
+  const popularityBoost = Math.min(Math.log10(popularity + 1) * 12000, 45000);
+  const sourceBoost =
+    normalizedQuery.length >= 5 && item.suggestionSourceRank !== undefined
+      ? Math.max(180000 - item.suggestionSourceRank * 12000, 0)
+      : 0;
+
+  return {
+    matchScore: matchScore + popularityBoost + recencyBoost + currentBoost + sourceBoost,
+    popularity,
+    releaseDate,
+    voteAverage: Number(item.voteAverage ?? 0),
+    recencyBoost,
+  };
+}
+
+function rankSearchSuggestions(items: SearchSuggestionCandidate[], query: string) {
+  return [...items].sort((a, b) => {
+    const aScore = scoreSearchSuggestion(a, query);
+    const bScore = scoreSearchSuggestion(b, query);
+
+    if (bScore.matchScore !== aScore.matchScore) return bScore.matchScore - aScore.matchScore;
+    if (bScore.popularity !== aScore.popularity) return bScore.popularity - aScore.popularity;
+    if (bScore.recencyBoost !== aScore.recencyBoost) return bScore.recencyBoost - aScore.recencyBoost;
+    if (bScore.releaseDate !== aScore.releaseDate) return bScore.releaseDate - aScore.releaseDate;
+    if (bScore.voteAverage !== aScore.voteAverage) return bScore.voteAverage - aScore.voteAverage;
+    return a.title.localeCompare(b.title);
+  });
+}
+
+async function searchTmdbSuggestions(query: string) {
+  const cacheKey = normalizedSearchText(query);
+  const cached = suggestionCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.items;
+
+  const searchParams = {
+    query,
+    page: 1,
+    include_adult: false,
+  };
+
+  const expansionQueries =
+    cacheKey.length === 4
+      ? SUGGESTION_NEXT_LETTERS.map((letter) => `${query}${letter}`)
+      : [];
+
+  const [multi, movies, tv, ...expanded] = await Promise.all([
+    tmdb<any>("/search/multi", searchParams),
+    tmdb<any>("/search/movie", searchParams),
+    tmdb<any>("/search/tv", searchParams),
+    ...expansionQueries.map((expandedQuery) =>
+      tmdb<any>("/search/multi", {
+        query: expandedQuery,
+        page: 1,
+        include_adult: false,
+      }),
+    ),
+  ]);
+
+  const seen = new Set<string>();
+  const directResults = [
+    ...(multi.results ?? []).filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv"),
+    ...(movies.results ?? []).map((item: TmdbMedia) => ({ ...item, media_type: "movie" as MediaType })),
+    ...(tv.results ?? []).map((item: TmdbMedia) => ({ ...item, media_type: "tv" as MediaType })),
+  ];
+
+  const directCandidates = directResults.map((item, index) => ({
+    ...normalizeMedia(item, item.media_type),
+    suggestionSourceRank: index,
+  }));
+
+  const expandedCandidates = expanded.flatMap((result) =>
+    (result.results ?? [])
+      .filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv")
+      .map((item: TmdbMedia) => normalizeMedia(item) as SearchSuggestionCandidate),
+  );
+
+  const results: SearchSuggestionCandidate[] = [
+    ...directCandidates.map((item) => ({
+      ...item,
+    })),
+    ...expandedCandidates,
+  ];
+
+  const items = results.filter((item) => {
+    const key = `${item.mediaType}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return Boolean(item.posterPath);
+  });
+
+  suggestionCache.set(cacheKey, {
+    expiresAt: Date.now() + SUGGESTION_CACHE_TTL_MS,
+    items,
+  });
+
+  return items;
 }
 
 function toSavedInput(input: any): SavedMedia {
@@ -425,6 +587,7 @@ const typeDefs = /* GraphQL */ `
     home: HomeData!
     discover(media: MediaType!, genre: String, year: String, sort: String, page: Int): [MediaItem!]!
     search(query: String!, page: Int): [MediaItem!]!
+    searchSuggestions(query: String!, limit: Int): [MediaItem!]!
     genres(media: MediaType!): [Genre!]!
     details(media: MediaType!, id: Int!, userId: String): MovieDetails!
     recommendations(media: MediaType!, id: Int!): [MediaItem!]!
@@ -534,6 +697,14 @@ const resolvers = {
         .filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv")
         .map((item: TmdbMedia) => normalizeMedia(item))
         .filter((item: any) => item.posterPath);
+    },
+    searchSuggestions: async (_: unknown, args: any) => {
+      const query = args.query.trim();
+      if (query.length < 2) return [];
+
+      const limit = Math.min(Math.max(Number(args.limit ?? 8), 1), 12);
+      const results = await searchTmdbSuggestions(query);
+      return rankSearchSuggestions(results, query).slice(0, limit);
     },
     genres: async (_: unknown, args: any) => {
       const result = await tmdb<any>(`/genre/${args.media}/list`);
@@ -837,7 +1008,7 @@ const yoga = createYoga({
   },
 });
 
-app.use("/graphql", yoga);
+app.use("/graphql", yoga as RequestHandler);
 
 await connectDb();
 

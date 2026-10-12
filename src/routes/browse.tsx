@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { MediaCard, posterUrl } from "@/components/MediaCard";
-import { getGenres, searchMulti, MediaItem, discover } from "@/lib/tmdb.functions";
+import { getGenres, searchMulti, searchSuggestions, MediaItem, discover } from "@/lib/tmdb.functions";
 import { useNavigate, useSearchParams } from "@/lib/navigation";
 
 const YEARS = Array.from({ length: 50 }, (_, i) => String(new Date().getFullYear() - i));
@@ -33,16 +33,20 @@ export function BrowsePage() {
       return;
     }
 
+    let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const result = await searchMulti({ data: { query } });
-        setSuggestions(result.results.slice(0, 6));
+        const result = await searchSuggestions({ data: { query, limit: 6 } });
+        if (!cancelled) setSuggestions(result.results);
       } catch {
-        setSuggestions([]);
+        if (!cancelled) setSuggestions([]);
       }
     }, 150);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [text]);
 
   const genresQ = useQuery({

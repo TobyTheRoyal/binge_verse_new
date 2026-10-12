@@ -4,7 +4,7 @@ import { Link } from "@/lib/navigation";
 
 export const TMDB_IMG = "https://image.tmdb.org/t/p";
 
-export function posterUrl(path: string | null, size: "w185" | "w342" | "w500" | "original" = "w342") {
+export function posterUrl(path: string | null, size: "w92" | "w185" | "w342" | "w500" | "original" = "w342") {
   if (!path) return null;
   return `${TMDB_IMG}/${size}${path}`;
 }

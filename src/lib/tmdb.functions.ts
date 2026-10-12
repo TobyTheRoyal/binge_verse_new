@@ -239,6 +239,20 @@ export async function searchMulti({ data }: { data: { query: string; page?: numb
   return { results: rankSearchResults(items, data.query), total: items.length };
 }
 
+export async function searchSuggestions({ data }: { data: { query: string; limit?: number } }) {
+  const result = await graphqlClient.request<any>(
+    `
+      query SearchSuggestions($query: String!, $limit: Int) {
+        searchSuggestions(query: $query, limit: $limit) { ${MEDIA_FIELDS} }
+      }
+    `,
+    data,
+  );
+
+  const items = result.searchSuggestions.map(fromMedia);
+  return { results: items, total: items.length };
+}
+
 export async function discover({
   data,
 }: {

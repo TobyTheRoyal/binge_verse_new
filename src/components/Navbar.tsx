@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { Link, useNavigate, useNavigation } from "@/lib/navigation";
-import { searchMulti, type MediaItem } from "@/lib/tmdb.functions";
+import { searchSuggestions, type MediaItem } from "@/lib/tmdb.functions";
 import { posterUrl } from "@/components/MediaCard";
 import { Search, LogOut, User as UserIcon, Film } from "lucide-react";
 
@@ -19,16 +19,20 @@ export function Navbar() {
       return;
     }
 
+    let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const result = await searchMulti({ data: { query } });
-        setSuggestions(result.results.slice(0, 6));
+        const result = await searchSuggestions({ data: { query, limit: 6 } });
+        if (!cancelled) setSuggestions(result.results);
       } catch {
-        setSuggestions([]);
+        if (!cancelled) setSuggestions([]);
       }
     }, 150);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [q]);
 
   const submit = (e: React.FormEvent) => {
