@@ -10,9 +10,19 @@ export interface MediaItem {
   backdrop_path: string | null;
   overview: string;
   release_date: string | null;
+  popularity: number;
   vote_average: number;
   vote_count: number;
   genre_ids: number[];
+}
+
+export interface SeasonInfo {
+  season_number: number;
+  name: string;
+  overview: string;
+  poster_path: string | null;
+  air_date: string | null;
+  episode_count: number;
 }
 
 export interface MediaDetails extends MediaItem {
@@ -21,6 +31,7 @@ export interface MediaDetails extends MediaItem {
   number_of_seasons: number | null;
   number_of_episodes: number | null;
   genres: { id: number; name: string }[];
+  seasons: SeasonInfo[];
   imdb_rating: string | null;
   rt_rating: string | null;
   imdb_id: string | null;
@@ -52,6 +63,7 @@ const MEDIA_FIELDS = `
   backdropPath
   overview
   releaseDate
+  popularity
   voteAverage
   voteCount
   genreIds
@@ -66,6 +78,7 @@ function fromMedia(raw: any): MediaItem {
     backdrop_path: raw.backdropPath,
     overview: raw.overview,
     release_date: raw.releaseDate,
+    popularity: raw.popularity ?? 0,
     vote_average: raw.voteAverage,
     vote_count: raw.voteCount,
     genre_ids: raw.genreIds,
@@ -88,6 +101,16 @@ function fromDetails(raw: any): MediaDetails {
     number_of_seasons: raw.numberOfSeasons,
     number_of_episodes: raw.numberOfEpisodes,
     genres: raw.genres ?? [],
+    seasons: (raw.seasons ?? [])
+      .filter((season: any) => Number(season?.seasonNumber ?? season?.season_number ?? 0) !== 0)
+      .map((season: any) => ({
+        season_number: season.seasonNumber ?? season.season_number ?? 0,
+        name: season.name ?? `Staffel ${season.seasonNumber ?? season.season_number ?? ""}`,
+        overview: season.overview ?? "",
+        poster_path: season.posterPath ?? season.poster_path ?? null,
+        air_date: season.airDate ?? season.air_date ?? null,
+        episode_count: season.episodeCount ?? season.episode_count ?? 0,
+      })),
     imdb_rating: raw.imdbRating,
     rt_rating: raw.rottenTomatoesRating,
     imdb_id: raw.imdbId,
@@ -141,6 +164,67 @@ export async function getHomeData() {
   };
 }
 
+function rankSearchResults(results: MediaItem[], query: string) {
+  const normalizedQuery = query.trim().toLowerCase().replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalizedQuery) return results;
+
+  const queryWords = normalizedQuery.split(/\s+/).filter(Boolean);
+
+  return [...results].sort((a, b) => {
+    const aTitle = a.title.toLowerCase();
+    const bTitle = b.title.toLowerCase();
+    const aOverview = (a.overview ?? "").toLowerCase();
+    const bOverview = (b.overview ?? "").toLowerCase();
+
+    const cleanTitle = (title: string) => title.replace(/^(the|a|an)\s+/i, "").replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    const toDateScore = (date: string | null) => {
+      const parsed = date ? new Date(date).getTime() : 0;
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const scoreTitle = (title: string, overview: string, voteAverage: number, popularity: number, releaseDate: string | null) => {
+      const normalizedTitle = title.replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+      const titleWithoutArticle = cleanTitle(title);
+
+      let matchScore = 0;
+      const titleWords = (normalizedTitle + " " + titleWithoutArticle).split(/\s+/).filter(Boolean);
+
+      if (normalizedTitle === normalizedQuery || titleWithoutArticle === normalizedQuery) matchScore += 150000;
+      if (normalizedTitle.startsWith(normalizedQuery) || titleWithoutArticle.startsWith(normalizedQuery)) matchScore += 120000;
+      if (normalizedTitle.includes(normalizedQuery) || titleWithoutArticle.includes(normalizedQuery)) matchScore += 90000;
+      if (overview.includes(normalizedQuery)) matchScore += 6000;
+
+      for (const word of queryWords) {
+        if (!word) continue;
+        const exactWordMatch = titleWords.includes(word);
+        if (exactWordMatch) matchScore += 30000;
+
+        const wordStartMatch = titleWords.some((titleWord) => titleWord.startsWith(word));
+        if (wordStartMatch) matchScore += 22000;
+
+        const wordContainsMatch = titleWords.some((titleWord) => titleWord.includes(word));
+        if (wordContainsMatch) matchScore += 12000;
+      }
+
+      const firstQueryWord = queryWords[0] ?? normalizedQuery;
+      if (normalizedTitle.startsWith(firstQueryWord) || titleWithoutArticle.startsWith(firstQueryWord)) matchScore += 15000;
+      if (normalizedTitle.includes(firstQueryWord) || titleWithoutArticle.includes(firstQueryWord)) matchScore += 8000;
+
+      const recencyScore = toDateScore(releaseDate);
+      return { matchScore, popularity, recencyScore, voteAverage };
+    };
+
+    const aScore = scoreTitle(aTitle, aOverview, a.vote_average ?? 0, a.popularity ?? 0, a.release_date ?? null);
+    const bScore = scoreTitle(bTitle, bOverview, b.vote_average ?? 0, b.popularity ?? 0, b.release_date ?? null);
+
+    if (bScore.matchScore !== aScore.matchScore) return bScore.matchScore - aScore.matchScore;
+    if (bScore.popularity !== aScore.popularity) return (bScore.popularity ?? 0) - (aScore.popularity ?? 0);
+    if (bScore.recencyScore !== aScore.recencyScore) return bScore.recencyScore - aScore.recencyScore;
+    if (bScore.voteAverage !== aScore.voteAverage) return (bScore.voteAverage ?? 0) - (aScore.voteAverage ?? 0);
+    return 0;
+  });
+}
+
 export async function searchMulti({ data }: { data: { query: string; page?: number } }) {
   const result = await graphqlClient.request<any>(
     `
@@ -151,7 +235,8 @@ export async function searchMulti({ data }: { data: { query: string; page?: numb
     data,
   );
 
-  return { results: result.search.map(fromMedia), total: result.search.length };
+  const items = result.search.map(fromMedia);
+  return { results: rankSearchResults(items, data.query), total: items.length };
 }
 
 export async function discover({
@@ -212,6 +297,14 @@ export async function getDetails({ data }: { data: { media: Media; id: number; u
           numberOfSeasons
           numberOfEpisodes
           genres { id name }
+          seasons {
+            seasonNumber
+            name
+            overview
+            posterPath
+            airDate
+            episodeCount
+          }
           imdbRating
           rottenTomatoesRating
           imdbId

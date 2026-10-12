@@ -1,8 +1,17 @@
 import { GraphQLClient } from "graphql-request";
 
-// Use absolute URL for graphql-request v7 compatibility in browser
-const graphqlUrl = typeof window !== "undefined" 
-  ? `${window.location.protocol}//${window.location.host}/graphql`
-  : "/graphql";
+const graphqlUrl = typeof window === "undefined"
+  ? "/graphql"
+  : `${window.location.origin}/graphql`;
 
-export const graphqlClient = new GraphQLClient(graphqlUrl);
+export const graphqlClient = new GraphQLClient(graphqlUrl, {
+  fetch: (url, options) =>
+    fetch(url, {
+      ...options,
+      credentials: "include",
+      headers: {
+        ...options?.headers,
+        "Content-Type": "application/json",
+      },
+    }),
+});

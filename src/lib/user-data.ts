@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useAuth } from "./auth-context";
 import { graphqlClient } from "./graphql";
 
@@ -15,6 +16,7 @@ export interface SavedItem {
 }
 
 export interface RatingEntry extends SavedItem {
+  seasonNumber?: number | null;
   rating: number;
   ratedAt: number;
 }
@@ -31,6 +33,7 @@ const savedFields = `
 
 const ratingFields = `
   ${savedFields}
+  seasonNumber
   rating
   ratedAt
 `;
@@ -62,6 +65,7 @@ function toInput(userId: string, item: Omit<SavedItem, "addedAt">) {
 function toRatingInput(userId: string, item: Omit<RatingEntry, "ratedAt" | "addedAt">) {
   return {
     ...toInput(userId, item),
+    seasonNumber: item.seasonNumber ?? null,
     rating: item.rating,
   };
 }
@@ -115,7 +119,7 @@ export function useWatchlist() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
 
-  const items = query.data ?? [];
+  const items = useMemo(() => query.data ?? [], [query.data]);
   const inList = (id: number, media_type: Media) => items.some((item) => item.id === id && item.media_type === media_type);
 
   const add = (item: Omit<SavedItem, "addedAt">) => {
@@ -154,7 +158,12 @@ export function useRatings() {
         `,
         { userId: user!.id },
       );
-      return data.ratings.map((entry: any) => ({ ...fromSaved(entry), rating: entry.rating, ratedAt: entry.ratedAt })) as RatingEntry[];
+      return data.ratings.map((entry: any) => ({
+        ...fromSaved(entry),
+        seasonNumber: entry.seasonNumber ?? null,
+        rating: entry.rating,
+        ratedAt: entry.ratedAt,
+      })) as RatingEntry[];
     },
   });
 
@@ -173,22 +182,26 @@ export function useRatings() {
   });
 
   const removeMutation = useMutation({
-    mutationFn: async ({ id, media_type }: Pick<RatingEntry, "id" | "media_type">) => {
+    mutationFn: async ({ id, media_type, seasonNumber }: Pick<RatingEntry, "id" | "media_type"> & { seasonNumber?: number | null }) => {
       await graphqlClient.request(
         `
-          mutation RemoveRating($userId: String!, $tmdbId: Int!, $mediaType: MediaType!) {
-            removeRating(userId: $userId, tmdbId: $tmdbId, mediaType: $mediaType)
+          mutation RemoveRating($userId: String!, $tmdbId: Int!, $mediaType: MediaType!, $seasonNumber: Int) {
+            removeRating(userId: $userId, tmdbId: $tmdbId, mediaType: $mediaType, seasonNumber: $seasonNumber)
           }
         `,
-        { userId: user!.id, tmdbId: id, mediaType: media_type },
+        { userId: user!.id, tmdbId: id, mediaType: media_type, seasonNumber: seasonNumber ?? null },
       );
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
 
-  const items = query.data ?? [];
-  const getRating = (id: number, media_type: Media) =>
-    items.find((entry) => entry.id === id && entry.media_type === media_type)?.rating ?? 0;
+  const items = useMemo(() => query.data ?? [], [query.data]);
+  const getRating = (id: number, media_type: Media, seasonNumber?: number | null) =>
+    items.find((entry) =>
+      entry.id === id &&
+      entry.media_type === media_type &&
+      (seasonNumber == null ? entry.seasonNumber == null : entry.seasonNumber === seasonNumber),
+    )?.rating ?? 0;
 
   const setRating = (item: Omit<RatingEntry, "ratedAt" | "addedAt">) => {
     if (!user) return false;
@@ -196,9 +209,9 @@ export function useRatings() {
     return true;
   };
 
-  const removeRating = (id: number, media_type: Media) => {
+  const removeRating = (id: number, media_type: Media, seasonNumber?: number | null) => {
     if (!user) return;
-    removeMutation.mutate({ id, media_type });
+    removeMutation.mutate({ id, media_type, seasonNumber });
   };
 
   return { items, getRating, setRating, removeRating, loading: query.isLoading };

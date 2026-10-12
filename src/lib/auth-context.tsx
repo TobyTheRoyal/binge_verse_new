@@ -6,76 +6,113 @@ export interface User {
   email: string;
 }
 
-interface StoredUser extends User {
-  passwordHash: string;
-}
-
-const USERS_KEY = "bv:users";
-const SESSION_KEY = "bv:session";
-
-async function hash(s: string): Promise<string> {
-  if (typeof crypto === "undefined" || !crypto.subtle) return s;
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function readUsers(): StoredUser[] {
-  if (typeof window === "undefined") return [];
-  try { return JSON.parse(localStorage.getItem(USERS_KEY) || "[]"); } catch { return []; }
-}
-function writeUsers(u: StoredUser[]) { localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
-
 interface AuthCtx {
   user: User | null;
   loading: boolean;
   signUp: (name: string, email: string, password: string) => Promise<{ error?: string }>;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
-  signOut: () => void;
+  signOut: () => Promise<void>;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
+
+function normalizeUser(raw: any): User | null {
+  if (!raw) return null;
+  return { id: raw.id, name: raw.name, email: raw.email };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const loadUser = async () => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const response = await fetch("/api/me", { credentials: "include" });
+
+        if (!response.ok && attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+          continue;
+        }
+
+        const data = await response.json();
+        setUser(normalizeUser(data.user));
+        return;
+      } catch {
+        if (attempt === 3) {
+          setUser(null);
+          return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  };
+
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(SESSION_KEY);
-      if (raw) setUser(JSON.parse(raw));
-    } catch {}
-    setLoading(false);
+    void loadUser().finally(() => setLoading(false));
   }, []);
 
   const signUp: AuthCtx["signUp"] = async (name, email, password) => {
-    email = email.trim().toLowerCase();
-    if (!name.trim() || !email || password.length < 6) return { error: "Bitte alle Felder ausfüllen (Passwort min. 6 Zeichen)." };
-    const users = readUsers();
-    if (users.find((u) => u.email === email)) return { error: "E-Mail bereits registriert." };
-    const passwordHash = await hash(password);
-    const newUser: StoredUser = { id: crypto.randomUUID(), name: name.trim(), email, passwordHash };
-    writeUsers([...users, newUser]);
-    const session: User = { id: newUser.id, name: newUser.name, email: newUser.email };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    setUser(session);
-    return {};
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!trimmedName || !trimmedEmail || password.length < 6) {
+      return { error: "Bitte alle Felder ausfüllen (Passwort min. 6 Zeichen)." };
+    }
+
+    try {
+      const response = await fetch("/api/register", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmedName, email: trimmedEmail, password }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        return { error: data.error ?? "Registrierung fehlgeschlagen." };
+      }
+
+      setUser(normalizeUser(data.user));
+      return {};
+    } catch {
+      return { error: "Registrierung fehlgeschlagen." };
+    }
   };
 
   const signIn: AuthCtx["signIn"] = async (email, password) => {
-    email = email.trim().toLowerCase();
-    const users = readUsers();
-    const u = users.find((x) => x.email === email);
-    if (!u) return { error: "Konto nicht gefunden." };
-    const h = await hash(password);
-    if (u.passwordHash !== h) return { error: "Falsches Passwort." };
-    const session: User = { id: u.id, name: u.name, email: u.email };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    setUser(session);
-    return {};
+    const trimmedEmail = email.trim().toLowerCase();
+
+    try {
+      const response = await fetch("/api/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmedEmail, password }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        return { error: data.error ?? "Login fehlgeschlagen." };
+      }
+
+      setUser(normalizeUser(data.user));
+      return {};
+    } catch {
+      return { error: "Login fehlgeschlagen." };
+    }
   };
 
-  const signOut = () => {
-    localStorage.removeItem(SESSION_KEY);
+  const signOut = async () => {
+    try {
+      await fetch("/api/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // ignore and still clear local UI state
+    }
     setUser(null);
   };
 

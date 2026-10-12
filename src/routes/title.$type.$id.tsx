@@ -7,6 +7,67 @@ import { getDetails } from "@/lib/tmdb.functions";
 import { useWatchlist, useRatings } from "@/lib/user-data";
 import { Link } from "@/lib/navigation";
 
+function SeasonRatingCard({
+  seasonNumber,
+  seasonName,
+  posterPath,
+  currentRating,
+  onRate,
+  onRemove,
+}: {
+  seasonNumber: number;
+  seasonName: string;
+  posterPath?: string | null;
+  currentRating: number;
+  onRate: (rating: number) => void;
+  onRemove: () => void;
+}) {
+  const [hover, setHover] = useState(0);
+
+  return (
+    <div className="rounded-2xl border border-border bg-surface/80 p-3 shadow-sm">
+      <div className="mb-3 flex items-center gap-3">
+        <div className="h-12 w-12 overflow-hidden rounded-xl border border-border bg-background/50">
+          {posterPath ? (
+            <img src={posterUrl(posterPath, "w92")!} alt={seasonName} className="h-full w-full object-cover" />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-[10px] font-bold text-muted-foreground">S{seasonNumber}</div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Staffel {seasonNumber}</div>
+          <div className="truncate text-sm font-semibold">{seasonName}</div>
+        </div>
+        {currentRating > 0 && (
+          <button onClick={onRemove} className="text-[10px] text-muted-foreground hover:text-destructive">
+            löschen
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1" onMouseLeave={() => setHover(0)}>
+        {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => {
+          const active = (hover || currentRating) >= n;
+          return (
+            <button
+              key={n}
+              onMouseEnter={() => setHover(n)}
+              onClick={() => onRate(n)}
+              className="p-0.5 transition-transform hover:scale-110"
+              aria-label={`Staffel ${seasonNumber}: ${n} von 10 Sternen`}
+            >
+              <Star className={`size-4 transition-colors ${active ? "text-[var(--color-gold)] fill-[var(--color-gold)]" : "text-muted-foreground/35"}`} />
+            </button>
+          );
+        })}
+        <span className="ml-2 min-w-[3ch] text-sm font-bold text-[var(--color-gold)]">
+          {hover || currentRating || "–"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number }) {
   const { user } = useAuth();
   const { inList, toggle } = useWatchlist();
@@ -28,6 +89,14 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
 
   const saved = inList(d.id, d.media_type);
   const myRating = getRating(d.id, d.media_type);
+  const seasonCards = media === "tv"
+    ? (d.seasons ?? []).filter((season) => season.season_number !== 0).map((season) => ({
+        seasonNumber: season.season_number,
+        seasonName: season.name,
+        posterPath: season.poster_path,
+        rating: getRating(d.id, d.media_type, season.season_number),
+      }))
+    : [];
 
   const item = {
     id: d.id,
@@ -78,11 +147,13 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
               </div>
 
               <div className="flex flex-wrap items-center gap-4 text-sm">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--color-gold)]/15 border border-[var(--color-gold)]/30">
-                  <Star className="size-4 text-[var(--color-gold)] fill-[var(--color-gold)]" />
-                  <span className="font-bold text-[var(--color-gold)]">{d.vote_average.toFixed(1)}</span>
-                  <span className="text-muted-foreground text-xs">TMDB</span>
-                </div>
+                {myRating > 0 && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--color-gold)]/15 border border-[var(--color-gold)]/30">
+                    <Star className="size-4 text-[var(--color-gold)] fill-[var(--color-gold)]" />
+                    <span className="font-bold text-[var(--color-gold)]">{myRating}</span>
+                    <span className="text-muted-foreground text-xs">Meine Bewertung</span>
+                  </div>
+                )}
                 {d.imdb_rating && (
                   <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-yellow-400/15 border border-yellow-400/30">
                     <span className="font-black text-yellow-400 text-xs tracking-wider">IMDB</span>
@@ -145,7 +216,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
               {user && (
                 <div className="bg-surface border border-border rounded-2xl p-4 max-w-md">
                   <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-bold">Deine Bewertung</h3>
+                    <h3 className="text-sm font-bold">{media === "tv" ? "Gesamtbewertung der Serie" : "Deine Bewertung"}</h3>
                     {myRating > 0 && (
                       <button onClick={() => removeRating(d.id, d.media_type)} className="text-xs text-muted-foreground hover:text-destructive">
                         zurücksetzen
@@ -175,6 +246,37 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
               )}
             </div>
           </div>
+
+          {media === "tv" && seasonCards.length > 0 && (
+            <section className="mt-12 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-2xl font-extrabold tracking-tight">Staffel-Bewertungen</h2>
+                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">pro Staffel</span>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {seasonCards.map((season) => (
+                  <SeasonRatingCard
+                    key={season.seasonNumber}
+                    seasonNumber={season.seasonNumber}
+                    seasonName={season.seasonName}
+                    posterPath={season.posterPath}
+                    currentRating={season.rating}
+                    onRate={(rating) => setRating({
+                      id: d.id,
+                      media_type: d.media_type,
+                      title: d.title,
+                      poster_path: d.poster_path,
+                      release_date: d.release_date,
+                      vote_average: d.vote_average,
+                      seasonNumber: season.seasonNumber,
+                      rating,
+                    })}
+                    onRemove={() => removeRating(d.id, d.media_type, season.seasonNumber)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Streaming providers */}
           {d.watchProviders && (d.watchProviders.flatrate.length || d.watchProviders.rent.length || d.watchProviders.buy.length) ? (

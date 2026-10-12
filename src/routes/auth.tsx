@@ -13,9 +13,27 @@ export function AuthPage() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const resetForm = () => {
+    setName("");
+    setEmail("");
+    setPassword("");
+    setErr(null);
+  };
+
   useEffect(() => {
     if (user) navigate("/", { replace: true });
   }, [navigate, user]);
+
+  useEffect(() => {
+    if (!user) {
+      resetForm();
+      const form = document.getElementById("auth-form") as HTMLFormElement | null;
+      if (form) {
+        form.reset();
+        requestAnimationFrame(() => form.reset());
+      }
+    }
+  }, [user]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -24,7 +42,10 @@ export function AuthPage() {
     const result = mode === "login" ? await signIn(email, password) : await signUp(name, email, password);
     setLoading(false);
     if (result.error) setErr(result.error);
-    else navigate("/");
+    else {
+      resetForm();
+      navigate("/");
+    }
   };
 
   return (
@@ -42,20 +63,20 @@ export function AuthPage() {
           </p>
         </div>
 
-        <form onSubmit={submit} className="bg-surface border border-border rounded-2xl p-6 space-y-4">
+        <form id="auth-form" autoComplete="off" key={user ? "authed" : "guest"} onSubmit={submit} className="bg-surface border border-border rounded-2xl p-6 space-y-4">
           {mode === "signup" && (
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</label>
-              <input value={name} onChange={(event) => setName(event.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
+              <input name="name" autoComplete="off" value={name} onChange={(event) => setName(event.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
             </div>
           )}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">E-Mail</label>
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
+            <input name="username" type="email" autoComplete="off" value={email} onChange={(event) => setEmail(event.target.value)} required className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
           </div>
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Passwort</label>
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
+            <input name={mode === "login" ? "current-password" : "new-password"} type="password" autoComplete="off" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring" />
           </div>
 
           {err && <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">{err}</div>}
@@ -67,7 +88,7 @@ export function AuthPage() {
 
           <p className="text-center text-sm text-muted-foreground">
             {mode === "login" ? "Noch kein Konto? " : "Schon registriert? "}
-            <button type="button" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setErr(null); }} className="text-primary font-semibold hover:underline">
+            <button type="button" onClick={() => { resetForm(); setMode(mode === "login" ? "signup" : "login"); }} className="text-primary font-semibold hover:underline">
               {mode === "login" ? "Registrieren" : "Einloggen"}
             </button>
           </p>

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { MediaCard } from "@/components/MediaCard";
+import { MediaCard, posterUrl } from "@/components/MediaCard";
 import { getGenres, searchMulti, MediaItem, discover } from "@/lib/tmdb.functions";
 import { useNavigate, useSearchParams } from "@/lib/navigation";
 
@@ -22,8 +22,28 @@ export function BrowsePage() {
   const year = searchParams.get("year") ?? undefined;
   const sort = searchParams.get("sort") ?? undefined;
   const [text, setText] = useState(q);
+  const [suggestions, setSuggestions] = useState<MediaItem[]>([]);
 
   useEffect(() => setText(q), [q]);
+
+  useEffect(() => {
+    const query = text.trim();
+    if (query.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await searchMulti({ data: { query } });
+        setSuggestions(result.results.slice(0, 6));
+      } catch {
+        setSuggestions([]);
+      }
+    }, 150);
+
+    return () => window.clearTimeout(timer);
+  }, [text]);
 
   const genresQ = useQuery({
     queryKey: ["genres", type],
@@ -80,12 +100,53 @@ export function BrowsePage() {
 
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-2">
-            <input
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              placeholder="Suche..."
-              className="flex-1 min-w-[200px] h-11 px-4 rounded-full bg-surface border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring text-sm"
-            />
+            <div className="relative flex-1 min-w-[200px]">
+              <input
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                placeholder="Suche..."
+                className="w-full h-11 px-4 rounded-full bg-surface border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring text-sm"
+              />
+              {suggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-2 overflow-hidden rounded-2xl border border-border bg-background/95 shadow-2xl backdrop-blur-sm z-20">
+                  {suggestions.map((item) => {
+                    const year = item.release_date ? new Date(item.release_date).getFullYear() : "—";
+                    const poster = posterUrl(item.poster_path, "w92");
+
+                    return (
+                      <button
+                        key={`${item.media_type}-${item.id}`}
+                        type="button"
+                        onClick={() => {
+                          setText(item.title);
+                          setSuggestions([]);
+                          navigate(`/title/${item.media_type}/${item.id}`);
+                        }}
+                        className="flex w-full items-center gap-3 px-2 py-2 text-left text-sm hover:bg-surface border-b border-border last:border-b-0"
+                      >
+                        <div className="h-14 w-10 overflow-hidden rounded-md border border-border bg-surface/60 shrink-0">
+                          {poster ? (
+                            <img src={poster} alt={item.title} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="grid h-full w-full place-items-center text-[9px] text-muted-foreground">IMG</div>
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-semibold text-foreground">{item.title}</div>
+                          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                            <span>{year}</span>
+                            <span className="rounded-full bg-surface px-1.5 py-0.5 uppercase tracking-[0.16em] text-[9px] text-muted-foreground">
+                              {item.media_type === "tv" ? "Serie" : "Film"}
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             <button type="submit" className="h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 transition">
               Suchen
             </button>
