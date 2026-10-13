@@ -1,8 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { MediaCard, posterUrl } from "@/components/MediaCard";
-import { getGenres, searchMulti, searchSuggestions, MediaItem, discover } from "@/lib/tmdb.functions";
+import {
+  discoverPage,
+  getGenres,
+  searchMultiPage,
+  searchSuggestions,
+  MediaItem,
+} from "@/lib/tmdb.functions";
 import { useNavigate, useSearchParams } from "@/lib/navigation";
 
 const YEARS = Array.from({ length: 50 }, (_, i) => String(new Date().getFullYear() - i));
@@ -23,6 +29,7 @@ export function BrowsePage() {
   const sort = searchParams.get("sort") ?? undefined;
   const [text, setText] = useState(q);
   const [suggestions, setSuggestions] = useState<MediaItem[]>([]);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => setText(q), [q]);
 
@@ -57,25 +64,60 @@ export function BrowsePage() {
 
   const isSearch = Boolean(q.trim());
 
-  const resultsQ = useQuery({
+  const resultsQ = useInfiniteQuery({
     queryKey: ["browse", { q, type, genre, year, sort }],
-    queryFn: async () => {
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
       if (isSearch) {
-        const result = await searchMulti({ data: { query: q } });
-        return { results: result.results as MediaItem[] };
+        return searchMultiPage({ data: { query: q, page: pageParam } });
       }
 
-      const result = await discover({
+      return discoverPage({
         data: {
           media: type,
           genre,
           year,
           sort_by: sort,
+          page: pageParam,
         },
       });
-      return { results: result.results as MediaItem[] };
     },
+    getNextPageParam: (lastPage) =>
+      lastPage.page < lastPage.total_pages ? lastPage.page + 1 : undefined,
   });
+
+  const results = useMemo(() => {
+    const seen = new Set<string>();
+    const items: MediaItem[] = [];
+    for (const page of resultsQ.data?.pages ?? []) {
+      for (const item of page.results) {
+        const key = `${item.media_type}-${item.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push(item);
+      }
+    }
+    return items;
+  }, [resultsQ.data]);
+  const hasNextPage = resultsQ.hasNextPage;
+  const isFetchingNextPage = resultsQ.isFetchingNextPage;
+  const fetchNextPage = resultsQ.fetchNextPage;
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node || !hasNextPage) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !isFetchingNextPage) {
+          void fetchNextPage();
+        }
+      },
+      { rootMargin: "900px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   const update = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams(searchParams);
@@ -114,7 +156,9 @@ export function BrowsePage() {
               {suggestions.length > 0 && (
                 <div className="absolute left-0 right-0 top-full mt-2 overflow-hidden rounded-2xl border border-border bg-background/95 shadow-2xl backdrop-blur-sm z-20">
                   {suggestions.map((item) => {
-                    const year = item.release_date ? new Date(item.release_date).getFullYear() : "—";
+                    const year = item.release_date
+                      ? new Date(item.release_date).getFullYear()
+                      : "—";
                     const poster = posterUrl(item.poster_path, "w92");
 
                     return (
@@ -130,9 +174,15 @@ export function BrowsePage() {
                       >
                         <div className="h-14 w-10 overflow-hidden rounded-md border border-border bg-surface/60 shrink-0">
                           {poster ? (
-                            <img src={poster} alt={item.title} className="h-full w-full object-cover" />
+                            <img
+                              src={poster}
+                              alt={item.title}
+                              className="h-full w-full object-cover"
+                            />
                           ) : (
-                            <div className="grid h-full w-full place-items-center text-[9px] text-muted-foreground">IMG</div>
+                            <div className="grid h-full w-full place-items-center text-[9px] text-muted-foreground">
+                              IMG
+                            </div>
                           )}
                         </div>
 
@@ -151,11 +201,21 @@ export function BrowsePage() {
                 </div>
               )}
             </div>
-            <button type="submit" className="h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 transition">
+            <button
+              type="submit"
+              className="h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 transition"
+            >
               Suchen
             </button>
             {isSearch && (
-              <button type="button" onClick={() => { setText(""); update({ q: undefined }); }} className="h-11 px-4 rounded-full bg-surface border border-border text-sm font-medium hover:bg-surface-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setText("");
+                  update({ q: undefined });
+                }}
+                className="h-11 px-4 rounded-full bg-surface border border-border text-sm font-medium hover:bg-surface-2"
+              >
                 Filter zeigen
               </button>
             )}
@@ -164,26 +224,58 @@ export function BrowsePage() {
           {!isSearch && (
             <div className="flex flex-wrap gap-2">
               <div className="inline-flex p-1 rounded-full bg-surface border border-border">
-                <button type="button" onClick={() => update({ type: "movie", genre: undefined })} className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "movie" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                <button
+                  type="button"
+                  onClick={() => update({ type: "movie", genre: undefined })}
+                  className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "movie" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
                   Filme
                 </button>
-                <button type="button" onClick={() => update({ type: "tv", genre: undefined })} className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "tv" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                <button
+                  type="button"
+                  onClick={() => update({ type: "tv", genre: undefined })}
+                  className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "tv" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
                   Serien
                 </button>
               </div>
 
-              <select value={genre ?? ""} onChange={(event) => update({ genre: event.target.value || undefined })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
+              <select
+                value={genre ?? ""}
+                onChange={(event) => update({ genre: event.target.value || undefined })}
+                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+              >
                 <option value="">Alle Genres</option>
-                {genresQ.data?.map((g) => <option key={g.id} value={String(g.id)}>{g.name}</option>)}
+                {genresQ.data?.map((g) => (
+                  <option key={g.id} value={String(g.id)}>
+                    {g.name}
+                  </option>
+                ))}
               </select>
 
-              <select value={year ?? ""} onChange={(event) => update({ year: event.target.value || undefined })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
+              <select
+                value={year ?? ""}
+                onChange={(event) => update({ year: event.target.value || undefined })}
+                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+              >
                 <option value="">Alle Jahre</option>
-                {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+                {YEARS.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
               </select>
 
-              <select value={sort ?? "popularity.desc"} onChange={(event) => update({ sort: event.target.value })} className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer">
-                {SORTS.map((s) => <option key={s.v} value={s.v}>{s.l}</option>)}
+              <select
+                value={sort ?? "popularity.desc"}
+                onChange={(event) => update({ sort: event.target.value })}
+                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+              >
+                {SORTS.map((s) => (
+                  <option key={s.v} value={s.v}>
+                    {s.l}
+                  </option>
+                ))}
               </select>
             </div>
           )}
@@ -191,11 +283,52 @@ export function BrowsePage() {
       </div>
 
       {resultsQ.isLoading ? (
-        <div className="py-20 grid place-items-center text-muted-foreground"><Loader2 className="animate-spin" /></div>
-      ) : resultsQ.data && resultsQ.data.results.length > 0 ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-5">
-          {resultsQ.data.results.map((it) => <MediaCard key={`${it.media_type}-${it.id}`} item={it} />)}
+        <div className="py-20 grid place-items-center text-muted-foreground">
+          <Loader2 className="animate-spin" />
         </div>
+      ) : results.length > 0 ? (
+        <>
+          <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>
+              {results.length} geladen
+              {resultsQ.data?.pages[0]?.total_results
+                ? ` von ${resultsQ.data.pages[0].total_results.toLocaleString()} Treffern`
+                : ""}
+            </span>
+            {resultsQ.isFetching && !resultsQ.isFetchingNextPage && (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="size-3 animate-spin" />
+                Aktualisiere…
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-5">
+            {results.map((it) => (
+              <MediaCard key={`${it.media_type}-${it.id}`} item={it} />
+            ))}
+          </div>
+          <div
+            ref={loadMoreRef}
+            className="min-h-16 grid place-items-center text-sm text-muted-foreground"
+          >
+            {resultsQ.isFetchingNextPage ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="size-4 animate-spin" />
+                Weitere Titel werden geladen…
+              </span>
+            ) : resultsQ.hasNextPage ? (
+              <button
+                type="button"
+                onClick={() => void resultsQ.fetchNextPage()}
+                className="h-10 rounded-full border border-border bg-surface px-5 font-semibold hover:bg-surface-2"
+              >
+                Mehr laden
+              </button>
+            ) : (
+              "Alle passenden Titel geladen."
+            )}
+          </div>
+        </>
       ) : (
         <div className="py-20 text-center text-muted-foreground">Keine Ergebnisse.</div>
       )}

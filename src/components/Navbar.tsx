@@ -62,6 +62,9 @@ export function Navbar() {
           <Link href="/browse" className={navClass("/browse")}>
             Browse
           </Link>
+          <Link href="/calendar" className={navClass("/calendar")}>
+            Calendar
+          </Link>
           {user && (
             <>
               <Link href="/watchlist" className={navClass("/watchlist")}>
@@ -70,6 +73,11 @@ export function Navbar() {
               <Link href="/history" className={navClass("/history")}>
                 History
               </Link>
+              {user.isAdmin && (
+                <Link href="/admin" className={navClass("/admin")}>
+                  Admin
+                </Link>
+              )}
             </>
           )}
         </nav>
@@ -102,9 +110,15 @@ export function Navbar() {
                     >
                       <div className="h-14 w-10 overflow-hidden rounded-md border border-border bg-surface/60 shrink-0">
                         {poster ? (
-                          <img src={poster} alt={item.title} className="h-full w-full object-cover" />
+                          <img
+                            src={poster}
+                            alt={item.title}
+                            className="h-full w-full object-cover"
+                          />
                         ) : (
-                          <div className="grid h-full w-full place-items-center text-[9px] text-muted-foreground">IMG</div>
+                          <div className="grid h-full w-full place-items-center text-[9px] text-muted-foreground">
+                            IMG
+                          </div>
                         )}
                       </div>
 
@@ -146,7 +160,10 @@ export function Navbar() {
               </button>
             </>
           ) : (
-            <Link href="/auth" className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity">
+            <Link
+              href="/auth"
+              className="inline-flex items-center gap-2 h-9 px-4 rounded-full bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity"
+            >
               <UserIcon className="size-4" />
               Login
             </Link>

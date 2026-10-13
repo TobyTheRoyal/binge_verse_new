@@ -4,7 +4,17 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  role: "USER" | "EDITOR" | "ADMIN";
+  isAdmin: boolean;
 }
+
+type UserResponse = {
+  id: string;
+  name: string;
+  email: string;
+  role?: User["role"];
+  isAdmin?: boolean;
+};
 
 interface AuthCtx {
   user: User | null;
@@ -16,9 +26,15 @@ interface AuthCtx {
 
 const Ctx = createContext<AuthCtx | null>(null);
 
-function normalizeUser(raw: any): User | null {
+function normalizeUser(raw: UserResponse | null | undefined): User | null {
   if (!raw) return null;
-  return { id: raw.id, name: raw.name, email: raw.email };
+  return {
+    id: raw.id,
+    name: raw.name,
+    email: raw.email,
+    role: raw.role ?? "USER",
+    isAdmin: Boolean(raw.isAdmin || raw.role === "ADMIN" || raw.role === "EDITOR"),
+  };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

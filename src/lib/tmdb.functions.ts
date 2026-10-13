@@ -339,6 +339,30 @@ export async function searchMulti({ data }: { data: { query: string; page?: numb
   return { results: rankSearchResults(items, data.query), total: items.length };
 }
 
+export async function searchMultiPage({ data }: { data: { query: string; page?: number } }) {
+  const result = await graphqlClient.request<any>(
+    `
+      query SearchPage($query: String!, $page: Int) {
+        searchPage(query: $query, page: $page) {
+          page
+          totalPages
+          totalResults
+          results { ${MEDIA_FIELDS} }
+        }
+      }
+    `,
+    data,
+  );
+
+  const items = result.searchPage.results.map(fromMedia);
+  return {
+    results: rankSearchResults(items, data.query),
+    page: result.searchPage.page as number,
+    total_pages: result.searchPage.totalPages as number,
+    total_results: result.searchPage.totalResults as number,
+  };
+}
+
 export async function searchSuggestions({ data }: { data: { query: string; limit?: number } }) {
   const result = await graphqlClient.request<any>(
     `
@@ -374,6 +398,39 @@ export async function discover({
   );
 
   return { results: result.discover.map(fromMedia), total_pages: 1, page: data.page ?? 1 };
+}
+
+export async function discoverPage({
+  data,
+}: {
+  data: { media: Media; genre?: string; year?: string; sort_by?: string; page?: number };
+}) {
+  const result = await graphqlClient.request<any>(
+    `
+      query DiscoverPage($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int) {
+        discoverPage(media: $media, genre: $genre, year: $year, sort: $sort, page: $page) {
+          page
+          totalPages
+          totalResults
+          results { ${MEDIA_FIELDS} }
+        }
+      }
+    `,
+    {
+      media: data.media,
+      genre: data.genre,
+      year: data.year,
+      sort: data.sort_by,
+      page: data.page,
+    },
+  );
+
+  return {
+    results: result.discoverPage.results.map(fromMedia),
+    page: result.discoverPage.page as number,
+    total_pages: result.discoverPage.totalPages as number,
+    total_results: result.discoverPage.totalResults as number,
+  };
 }
 
 export async function getGenres({ data }: { data: { media: Media } }) {

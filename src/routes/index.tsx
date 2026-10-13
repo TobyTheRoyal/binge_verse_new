@@ -6,6 +6,12 @@ import { RecommendedRow } from "@/components/RecommendedRow";
 import { getHomeData } from "@/lib/home.functions";
 import { Link } from "@/lib/navigation";
 import { useContinueWatching } from "@/lib/user-data";
+import {
+  getReleaseEvents,
+  getWatchlistReleaseEvents,
+  type ReleaseEvent,
+} from "@/lib/release-calendar";
+import { useAuth } from "@/lib/auth-context";
 
 function ContinueWatchingRow() {
   const { items, loading } = useContinueWatching();
@@ -66,6 +72,95 @@ function ContinueWatchingRow() {
         })}
       </div>
     </section>
+  );
+}
+
+function ReleaseMiniCard({ item }: { item: ReleaseEvent }) {
+  const poster = posterUrl(item.poster_path, "w185");
+  return (
+    <Link
+      href={`/title/${item.media_type}/${item.tmdbId}`}
+      className="group w-[170px] shrink-0 snap-start"
+    >
+      <div className="aspect-[2/3] overflow-hidden rounded-lg border border-border bg-surface">
+        {poster ? <img src={poster} alt={item.title} className="size-full object-cover" /> : null}
+      </div>
+      <div className="mt-2 line-clamp-2 text-sm font-bold group-hover:text-primary">
+        {item.title}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">
+        {item.release_date
+          ? new Date(`${item.release_date}T00:00:00`).toLocaleDateString()
+          : "Coming soon"}
+      </div>
+      <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
+        {item.provider}
+      </div>
+    </Link>
+  );
+}
+
+function ComingSoonStreamingRow() {
+  const { user } = useAuth();
+  const { data } = useQuery({
+    queryKey: ["home-release-events"],
+    queryFn: () => getReleaseEvents({ region: "AT", limit: 16 }),
+  });
+  const { data: watchlistReleases } = useQuery({
+    queryKey: ["home-watchlist-release-events", user?.id],
+    enabled: Boolean(user),
+    queryFn: () => getWatchlistReleaseEvents({ userId: user!.id, region: "AT" }),
+  });
+
+  const items = data?.items ?? [];
+  const watchlistItems = watchlistReleases ?? [];
+  if (!items.length && !watchlistItems.length) return null;
+
+  return (
+    <>
+      {watchlistItems.length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-extrabold tracking-tight">
+                Coming Soon From Your Watchlist
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                {watchlistItems.length} Watchlist-Titel mit Streamingstart.
+              </p>
+            </div>
+            <Link href="/calendar" className="text-sm font-semibold text-primary hover:underline">
+              View Calendar
+            </Link>
+          </div>
+          <div className="flex snap-x gap-4 overflow-x-auto scroll-row pb-4">
+            {watchlistItems.slice(0, 10).map((item) => (
+              <ReleaseMiniCard key={item.id} item={item} />
+            ))}
+          </div>
+        </section>
+      )}
+      {items.length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-extrabold tracking-tight">Coming Soon on Streaming</h2>
+              <p className="text-sm text-muted-foreground">
+                Neue Starts auf Netflix, Prime Video, Paramount+, im Kino und mehr
+              </p>
+            </div>
+            <Link href="/calendar" className="text-sm font-semibold text-primary hover:underline">
+              View Calendar
+            </Link>
+          </div>
+          <div className="flex snap-x gap-4 overflow-x-auto scroll-row pb-4">
+            {items.slice(0, 14).map((item) => (
+              <ReleaseMiniCard key={item.id} item={item} />
+            ))}
+          </div>
+        </section>
+      )}
+    </>
   );
 }
 
@@ -153,6 +248,7 @@ export function HomePage() {
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 mt-10 space-y-12">
         <ContinueWatchingRow />
+        <ComingSoonStreamingRow />
         <RecommendedRow />
         <MediaRow
           title="Trending heute"

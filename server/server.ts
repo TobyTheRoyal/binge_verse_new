@@ -18,6 +18,18 @@ const SUGGESTION_NEXT_LETTERS = ["a", "e", "i", "o", "u", "r", "s", "t", "l", "n
 
 type MediaType = "movie" | "tv";
 type WatchStatus = "PLAN_TO_WATCH" | "WATCHING" | "COMPLETED" | "ON_HOLD" | "DROPPED";
+type UserRole = "USER" | "EDITOR" | "ADMIN";
+type ReleaseType =
+  | "CINEMA_RELEASE"
+  | "MOVIE_PREMIERE"
+  | "MOVIE_CATALOG"
+  | "TV_SERIES_PREMIERE"
+  | "TV_SEASON"
+  | "TV_EPISODE"
+  | "TV_CATALOG";
+type PublicationStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED";
+type ConfirmationStatus = "ANNOUNCED" | "CONFIRMED" | "UNCONFIRMED" | "POSTPONED" | "CANCELLED";
+type DatePrecision = "EXACT" | "MONTH" | "QUARTER" | "YEAR" | "UNKNOWN";
 
 type TmdbMedia = {
   id: number;
@@ -64,6 +76,25 @@ const WATCH_STATUSES: WatchStatus[] = [
   "ON_HOLD",
   "DROPPED",
 ];
+const USER_ROLES: UserRole[] = ["USER", "EDITOR", "ADMIN"];
+const RELEASE_TYPES: ReleaseType[] = [
+  "CINEMA_RELEASE",
+  "MOVIE_PREMIERE",
+  "MOVIE_CATALOG",
+  "TV_SERIES_PREMIERE",
+  "TV_SEASON",
+  "TV_EPISODE",
+  "TV_CATALOG",
+];
+const PUBLICATION_STATUSES: PublicationStatus[] = ["DRAFT", "PUBLISHED", "ARCHIVED"];
+const CONFIRMATION_STATUSES: ConfirmationStatus[] = [
+  "ANNOUNCED",
+  "CONFIRMED",
+  "UNCONFIRMED",
+  "POSTPONED",
+  "CANCELLED",
+];
+const DATE_PRECISIONS: DatePrecision[] = ["EXACT", "MONTH", "QUARTER", "YEAR", "UNKNOWN"];
 
 const ratingSchema = new Schema(
   {
@@ -142,6 +173,68 @@ episodeProgressSchema.index(
 );
 episodeProgressSchema.index({ userId: 1, watchedAt: -1 });
 
+const releaseEventSchema = new Schema(
+  {
+    tmdbId: { type: Number, required: true, index: true },
+    mediaType: { type: String, required: true, enum: ["movie", "tv"], index: true },
+    title: { type: String, required: true, trim: true },
+    posterPath: { type: String, default: null },
+    backdropPath: { type: String, default: null },
+    releaseDate: { type: String, default: null, index: true },
+    voteAverage: { type: Number, default: 0 },
+    popularity: { type: Number, default: 0, index: true },
+    genreIds: { type: [Number], default: [] },
+    provider: { type: String, required: true, trim: true, index: true },
+    region: { type: String, required: true, uppercase: true, trim: true, index: true },
+    datePrecision: { type: String, required: true, enum: DATE_PRECISIONS, default: "EXACT" },
+    releaseYear: { type: Number, default: null, index: true },
+    releaseMonth: { type: Number, default: null, index: true },
+    releaseQuarter: { type: Number, default: null },
+    releaseType: { type: String, required: true, enum: RELEASE_TYPES, index: true },
+    publicationStatus: {
+      type: String,
+      required: true,
+      enum: PUBLICATION_STATUSES,
+      default: "DRAFT",
+      index: true,
+    },
+    confirmationStatus: {
+      type: String,
+      required: true,
+      enum: CONFIRMATION_STATUSES,
+      default: "ANNOUNCED",
+      index: true,
+    },
+    seasonNumber: { type: Number, default: null },
+    episodeNumber: { type: Number, default: null },
+    sourceUrl: { type: String, default: null },
+    notes: { type: String, default: "" },
+    lastVerifiedAt: { type: Date, default: null },
+    createdBy: { type: String, required: true, index: true },
+    updatedBy: { type: String, required: true },
+  },
+  { timestamps: true },
+);
+
+releaseEventSchema.index({
+  publicationStatus: 1,
+  region: 1,
+  provider: 1,
+  releaseDate: 1,
+  releaseYear: 1,
+  releaseMonth: 1,
+});
+releaseEventSchema.index({
+  tmdbId: 1,
+  mediaType: 1,
+  provider: 1,
+  region: 1,
+  releaseType: 1,
+  releaseDate: 1,
+  seasonNumber: 1,
+  episodeNumber: 1,
+});
+
 const Rating = mongoose.models.Rating || mongoose.model("Rating", ratingSchema);
 const WatchlistItem =
   mongoose.models.WatchlistItem || mongoose.model("WatchlistItem", watchlistSchema);
@@ -149,6 +242,8 @@ const WatchProgress =
   mongoose.models.WatchProgress || mongoose.model("WatchProgress", watchProgressSchema);
 const EpisodeProgress =
   mongoose.models.EpisodeProgress || mongoose.model("EpisodeProgress", episodeProgressSchema);
+const ReleaseEvent =
+  mongoose.models.ReleaseEvent || mongoose.model("ReleaseEvent", releaseEventSchema);
 
 function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
   const mediaType = raw.media_type ?? fallbackMedia ?? (raw.title ? "movie" : "tv");
@@ -494,6 +589,45 @@ function mapRating(doc: any) {
   };
 }
 
+function parseAdminEmails() {
+  return (process.env.ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isAdminEmail(email?: string | null) {
+  return Boolean(email && parseAdminEmails().includes(email.toLowerCase()));
+}
+
+async function getUserProfile(user: { id: string; name: string; email: string }) {
+  const doc = hasDb() ? await User.findById(user.id) : null;
+  const role: UserRole =
+    doc && USER_ROLES.includes(doc.role) ? doc.role : isAdminEmail(user.email) ? "ADMIN" : "USER";
+
+  if (doc && isAdminEmail(user.email) && doc.role !== "ADMIN") {
+    doc.role = "ADMIN";
+    await doc.save();
+  }
+
+  return {
+    id: user.id,
+    name: doc?.name ?? user.name,
+    email: doc?.email ?? user.email,
+    role,
+    isAdmin: role === "ADMIN",
+  };
+}
+
+async function requireAdmin(context: any) {
+  const user = requireAuth(context);
+  const profile = await getUserProfile(user);
+  if (profile.role !== "ADMIN" && profile.role !== "EDITOR") {
+    throw new Error("Admin access required.");
+  }
+  return profile;
+}
+
 function normalizeUserRating(value: unknown) {
   const rating = Math.round(Number(value) * 2) / 2;
   if (!Number.isFinite(rating) || rating < 0.5 || rating > 10) {
@@ -760,6 +894,44 @@ const typeDefs = /* GraphQL */ `
     DROPPED
   }
 
+  enum UserRole {
+    USER
+    EDITOR
+    ADMIN
+  }
+
+  enum ReleaseType {
+    CINEMA_RELEASE
+    MOVIE_PREMIERE
+    MOVIE_CATALOG
+    TV_SERIES_PREMIERE
+    TV_SEASON
+    TV_EPISODE
+    TV_CATALOG
+  }
+
+  enum PublicationStatus {
+    DRAFT
+    PUBLISHED
+    ARCHIVED
+  }
+
+  enum ConfirmationStatus {
+    ANNOUNCED
+    CONFIRMED
+    UNCONFIRMED
+    POSTPONED
+    CANCELLED
+  }
+
+  enum DatePrecision {
+    EXACT
+    MONTH
+    QUARTER
+    YEAR
+    UNKNOWN
+  }
+
   type MediaItem {
     id: Int!
     mediaType: MediaType!
@@ -870,10 +1042,19 @@ const typeDefs = /* GraphQL */ `
     topTv: [MediaItem!]!
   }
 
+  type MediaItemConnection {
+    results: [MediaItem!]!
+    page: Int!
+    totalPages: Int!
+    totalResults: Int!
+  }
+
   type UserProfile {
     id: ID!
     name: String!
     email: String!
+    role: UserRole!
+    isAdmin: Boolean!
   }
 
   type AuthPayload {
@@ -921,6 +1102,50 @@ const typeDefs = /* GraphQL */ `
     nextEpisode: Episode
   }
 
+  type ReleaseEvent {
+    id: ID!
+    tmdbId: Int!
+    mediaType: MediaType!
+    title: String!
+    posterPath: String
+    backdropPath: String
+    voteAverage: Float!
+    popularity: Float!
+    genreIds: [Int!]!
+    provider: String!
+    region: String!
+    releaseDate: String
+    datePrecision: DatePrecision!
+    releaseYear: Int
+    releaseMonth: Int
+    releaseQuarter: Int
+    releaseType: ReleaseType!
+    publicationStatus: PublicationStatus!
+    confirmationStatus: ConfirmationStatus!
+    seasonNumber: Int
+    episodeNumber: Int
+    sourceUrl: String
+    notes: String!
+    createdBy: String!
+    updatedBy: String!
+    createdAt: Float!
+    updatedAt: Float!
+    isWatchlisted: Boolean!
+  }
+
+  type ReleaseEventConnection {
+    items: [ReleaseEvent!]!
+    total: Int!
+  }
+
+  type AdminReleaseStats {
+    releasesThisMonth: Int!
+    upcomingReleases: Int!
+    drafts: Int!
+    unconfirmed: Int!
+    recentlyEdited: [ReleaseEvent!]!
+  }
+
   input RegisterInput {
     name: String!
     email: String!
@@ -966,6 +1191,75 @@ const typeDefs = /* GraphQL */ `
     totalEpisodes: Int
   }
 
+  input ReleaseEventInput {
+    tmdbId: Int!
+    mediaType: MediaType!
+    title: String!
+    posterPath: String
+    backdropPath: String
+    voteAverage: Float
+    popularity: Float
+    genreIds: [Int!]
+    provider: String!
+    region: String!
+    releaseDate: String
+    datePrecision: DatePrecision!
+    releaseYear: Int
+    releaseMonth: Int
+    releaseQuarter: Int
+    releaseType: ReleaseType!
+    publicationStatus: PublicationStatus
+    confirmationStatus: ConfirmationStatus!
+    seasonNumber: Int
+    episodeNumber: Int
+    sourceUrl: String
+    notes: String
+  }
+
+  input ReleaseEventPatchInput {
+    tmdbId: Int
+    mediaType: MediaType
+    title: String
+    posterPath: String
+    backdropPath: String
+    voteAverage: Float
+    popularity: Float
+    genreIds: [Int!]
+    provider: String
+    region: String
+    releaseDate: String
+    datePrecision: DatePrecision
+    releaseYear: Int
+    releaseMonth: Int
+    releaseQuarter: Int
+    releaseType: ReleaseType
+    publicationStatus: PublicationStatus
+    confirmationStatus: ConfirmationStatus
+    seasonNumber: Int
+    episodeNumber: Int
+    sourceUrl: String
+    notes: String
+  }
+
+  input ReleaseEventFilterInput {
+    region: String
+    providers: [String!]
+    mediaType: MediaType
+    releaseTypes: [ReleaseType!]
+    confirmationStatuses: [ConfirmationStatus!]
+    publicationStatus: PublicationStatus
+    genreIds: [Int!]
+    tmdbId: Int
+    year: Int
+    month: Int
+    fromDate: String
+    toDate: String
+    datePrecision: DatePrecision
+    sort: String
+    limit: Int
+    offset: Int
+  }
+
   input EpisodeProgressInput {
     userId: String
     tmdbId: Int!
@@ -1008,7 +1302,15 @@ const typeDefs = /* GraphQL */ `
     me: UserProfile
     home: HomeData!
     discover(media: MediaType!, genre: String, year: String, sort: String, page: Int): [MediaItem!]!
+    discoverPage(
+      media: MediaType!
+      genre: String
+      year: String
+      sort: String
+      page: Int
+    ): MediaItemConnection!
     search(query: String!, page: Int): [MediaItem!]!
+    searchPage(query: String!, page: Int): MediaItemConnection!
     searchSuggestions(query: String!, limit: Int): [MediaItem!]!
     genres(media: MediaType!): [Genre!]!
     details(media: MediaType!, id: Int!, userId: String): MovieDetails!
@@ -1019,6 +1321,11 @@ const typeDefs = /* GraphQL */ `
     watchProgress(userId: String!, tmdbId: Int!, mediaType: MediaType!): WatchProgress
     watchProgressList(userId: String!, mediaType: MediaType, status: WatchStatus): [WatchProgress!]!
     continueWatching(userId: String!): [WatchProgress!]!
+    releaseEvents(filter: ReleaseEventFilterInput): ReleaseEventConnection!
+    releaseEventsByTitle(tmdbId: Int!, mediaType: MediaType!, region: String): [ReleaseEvent!]!
+    watchlistReleaseEvents(userId: String!, region: String): [ReleaseEvent!]!
+    adminReleaseEvents(filter: ReleaseEventFilterInput): ReleaseEventConnection!
+    adminReleaseStats: AdminReleaseStats!
   }
 
   type Mutation {
@@ -1033,6 +1340,12 @@ const typeDefs = /* GraphQL */ `
     removeWatchProgress(userId: String!, tmdbId: Int!, mediaType: MediaType!): Boolean!
     setEpisodeWatched(input: EpisodeProgressInput!): WatchProgress!
     setSeasonWatched(input: SeasonProgressInput!): WatchProgress!
+    createReleaseEvent(input: ReleaseEventInput!): ReleaseEvent!
+    updateReleaseEvent(id: ID!, input: ReleaseEventPatchInput!): ReleaseEvent!
+    deleteReleaseEvent(id: ID!): Boolean!
+    bulkCreateReleaseEvents(inputs: [ReleaseEventInput!]!): [ReleaseEvent!]!
+    bulkUpdateReleaseEvents(ids: [ID!]!, input: ReleaseEventPatchInput!): [ReleaseEvent!]!
+    bulkDeleteReleaseEvents(ids: [ID!]!): Boolean!
   }
 `;
 
@@ -1041,6 +1354,7 @@ const userSchema = new Schema(
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, trim: true, lowercase: true },
     passwordHash: { type: String, required: true },
+    role: { type: String, required: true, enum: USER_ROLES, default: "USER", index: true },
   },
   { timestamps: true },
 );
@@ -1052,12 +1366,7 @@ const resolvers = {
     me: async (_root: unknown, _args: any, context: any) => {
       const user = context?.user ?? getAuthUserFromRequest(context?.request);
       if (!user) return null;
-
-      return {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-      };
+      return getUserProfile(user);
     },
     home: async () => {
       const [trendDay, trendMovie, trendTv, popMovie, popTv, topMovie, topTv] = await Promise.all([
@@ -1104,7 +1413,10 @@ const resolvers = {
     },
     discover: async (_: unknown, args: any) => {
       const params: Record<string, string | number | boolean | undefined> = {
-        sort_by: args.sort || "popularity.desc",
+        sort_by:
+          args.media === "tv" && args.sort?.startsWith?.("primary_release_date")
+            ? args.sort.replace("primary_release_date", "first_air_date")
+            : args.sort || "popularity.desc",
         page: args.page ?? 1,
         include_adult: false,
       };
@@ -1120,6 +1432,33 @@ const resolvers = {
         .map((item: TmdbMedia) => normalizeMedia(item, args.media))
         .filter((item: any) => item.posterPath);
     },
+    discoverPage: async (_: unknown, args: any) => {
+      const page = Math.max(1, Number(args.page ?? 1));
+      const params: Record<string, string | number | boolean | undefined> = {
+        sort_by:
+          args.media === "tv" && args.sort?.startsWith?.("primary_release_date")
+            ? args.sort.replace("primary_release_date", "first_air_date")
+            : args.sort || "popularity.desc",
+        page,
+        include_adult: false,
+      };
+
+      if (args.genre) params.with_genres = args.genre;
+      if (args.year) {
+        if (args.media === "movie") params.primary_release_year = args.year;
+        else params.first_air_date_year = args.year;
+      }
+
+      const result = await tmdb<any>(`/discover/${args.media}`, params);
+      return {
+        results: (result.results ?? [])
+          .map((item: TmdbMedia) => normalizeMedia(item, args.media))
+          .filter((item: any) => item.posterPath),
+        page: result.page ?? page,
+        totalPages: Math.min(Number(result.total_pages ?? page), 500),
+        totalResults: Number(result.total_results ?? 0),
+      };
+    },
     search: async (_: unknown, args: any) => {
       if (!args.query.trim()) return [];
       const result = await tmdb<any>("/search/multi", {
@@ -1132,6 +1471,26 @@ const resolvers = {
         .filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv")
         .map((item: TmdbMedia) => normalizeMedia(item))
         .filter((item: any) => item.posterPath);
+    },
+    searchPage: async (_: unknown, args: any) => {
+      if (!args.query.trim()) {
+        return { results: [], page: 1, totalPages: 1, totalResults: 0 };
+      }
+      const page = Math.max(1, Number(args.page ?? 1));
+      const result = await tmdb<any>("/search/multi", {
+        query: args.query,
+        page,
+        include_adult: false,
+      });
+      return {
+        results: (result.results ?? [])
+          .filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv")
+          .map((item: TmdbMedia) => normalizeMedia(item))
+          .filter((item: any) => item.posterPath),
+        page: result.page ?? page,
+        totalPages: Math.min(Number(result.total_pages ?? page), 500),
+        totalResults: Number(result.total_results ?? 0),
+      };
     },
     searchSuggestions: async (_: unknown, args: any) => {
       const query = args.query.trim();
@@ -1308,6 +1667,121 @@ const resolvers = {
       const progress = await Promise.all(docs.map((doc) => enrichWatchProgress(doc, true)));
       return progress.filter((item) => item.nextEpisode);
     },
+    releaseEvents: async (_: unknown, args: any, context: any) => {
+      if (!hasDb()) return { items: [], total: 0 };
+      const filterArgs = args.filter ?? {};
+      const filter = buildReleaseFilter(filterArgs, true);
+      const limit = Math.min(Number(filterArgs.limit ?? 60), 120);
+      const offset = Math.max(Number(filterArgs.offset ?? 0), 0);
+      const sort: Record<string, 1 | -1> =
+        filterArgs.sort === "popularity"
+          ? { popularity: -1, releaseDate: 1 }
+          : filterArgs.sort === "newest"
+            ? { createdAt: -1 }
+            : { releaseDate: 1, releaseYear: 1, releaseMonth: 1, popularity: -1 };
+      const authUser = context?.user ?? getAuthUserFromRequest(context?.request);
+      const watchlistDocs =
+        authUser && hasDb()
+          ? await WatchlistItem.find({ userId: authUser.id }).select("tmdbId mediaType")
+          : [];
+      const watchlistMatches = new Set(
+        watchlistDocs.map((doc: any) => `${doc.mediaType}-${doc.tmdbId}`),
+      );
+      const [items, total] = await Promise.all([
+        ReleaseEvent.find(filter).sort(sort).skip(offset).limit(limit),
+        ReleaseEvent.countDocuments(filter),
+      ]);
+      return { items: items.map((doc) => mapReleaseEvent(doc, watchlistMatches)), total };
+    },
+    releaseEventsByTitle: async (_: unknown, args: any, context: any) => {
+      if (!hasDb()) return [];
+      const filter: Record<string, unknown> = {
+        tmdbId: args.tmdbId,
+        mediaType: args.mediaType,
+        publicationStatus: "PUBLISHED",
+      };
+      if (args.region) filter.region = String(args.region).toUpperCase();
+      const authUser = context?.user ?? getAuthUserFromRequest(context?.request);
+      const watchlistMatches = new Set<string>();
+      if (authUser) {
+        const saved = await WatchlistItem.exists({
+          userId: authUser.id,
+          tmdbId: args.tmdbId,
+          mediaType: args.mediaType,
+        });
+        if (saved) watchlistMatches.add(`${args.mediaType}-${args.tmdbId}`);
+      }
+      const docs = await ReleaseEvent.find(filter)
+        .sort({ releaseDate: 1, releaseYear: 1, releaseMonth: 1 })
+        .limit(12);
+      return docs.map((doc) => mapReleaseEvent(doc, watchlistMatches));
+    },
+    watchlistReleaseEvents: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId);
+      if (!hasDb()) return [];
+      const saved = await WatchlistItem.find({ userId }).select("tmdbId mediaType");
+      if (!saved.length) return [];
+      const pairs = saved.map((item: any) => ({ tmdbId: item.tmdbId, mediaType: item.mediaType }));
+      const filter = {
+        publicationStatus: "PUBLISHED",
+        region: String(args.region ?? "DE").toUpperCase(),
+        $or: pairs,
+      };
+      const docs = await ReleaseEvent.find(filter)
+        .sort({ releaseDate: 1, releaseYear: 1, releaseMonth: 1 })
+        .limit(20);
+      const matches = new Set(saved.map((item: any) => `${item.mediaType}-${item.tmdbId}`));
+      return docs.map((doc) => mapReleaseEvent(doc, matches));
+    },
+    adminReleaseEvents: async (_: unknown, args: any, context: any) => {
+      await requireAdmin(context);
+      if (!hasDb()) return { items: [], total: 0 };
+      const filterArgs = args.filter ?? {};
+      const filter = buildReleaseFilter(filterArgs, false);
+      const limit = Math.min(Number(filterArgs.limit ?? 80), 200);
+      const offset = Math.max(Number(filterArgs.offset ?? 0), 0);
+      const sort: Record<string, 1 | -1> =
+        filterArgs.sort === "newest" ? { updatedAt: -1 } : { releaseDate: 1, updatedAt: -1 };
+      const [items, total] = await Promise.all([
+        ReleaseEvent.find(filter).sort(sort).skip(offset).limit(limit),
+        ReleaseEvent.countDocuments(filter),
+      ]);
+      return { items: items.map((doc) => mapReleaseEvent(doc)), total };
+    },
+    adminReleaseStats: async (_: unknown, _args: any, context: any) => {
+      await requireAdmin(context);
+      if (!hasDb()) {
+        return {
+          releasesThisMonth: 0,
+          upcomingReleases: 0,
+          drafts: 0,
+          unconfirmed: 0,
+          recentlyEdited: [],
+        };
+      }
+      const now = new Date();
+      const year = now.getUTCFullYear();
+      const month = now.getUTCMonth() + 1;
+      const today = now.toISOString().slice(0, 10);
+      const [releasesThisMonth, upcomingReleases, drafts, unconfirmed, recentlyEdited] =
+        await Promise.all([
+          ReleaseEvent.countDocuments({ releaseYear: year, releaseMonth: month }),
+          ReleaseEvent.countDocuments({
+            publicationStatus: "PUBLISHED",
+            $or: [{ releaseDate: { $gte: today } }, { datePrecision: { $ne: "EXACT" } }],
+          }),
+          ReleaseEvent.countDocuments({ publicationStatus: "DRAFT" }),
+          ReleaseEvent.countDocuments({ confirmationStatus: "UNCONFIRMED" }),
+          ReleaseEvent.find({}).sort({ updatedAt: -1 }).limit(8),
+        ]);
+      return {
+        releasesThisMonth,
+        upcomingReleases,
+        drafts,
+        unconfirmed,
+        recentlyEdited: recentlyEdited.map((doc) => mapReleaseEvent(doc)),
+      };
+    },
   },
   Mutation: {
     register: async (_root: unknown, args: any, context: any) => {
@@ -1330,11 +1804,15 @@ const resolvers = {
       }
 
       const passwordHash = await bcrypt.hash(password, 12);
-      const user = await User.create({ name, email, passwordHash });
+      const user = await User.create({
+        name,
+        email,
+        passwordHash,
+        role: isAdminEmail(email) ? "ADMIN" : "USER",
+      });
       const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
       setAuthCookie(context.response, safeUser);
-
-      return { user: safeUser };
+      return { user: await getUserProfile(safeUser) };
     },
     login: async (_root: unknown, args: any, context: any) => {
       assertDb();
@@ -1355,7 +1833,7 @@ const resolvers = {
 
       const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
       setAuthCookie(context.response, safeUser);
-      return { user: safeUser };
+      return { user: await getUserProfile(safeUser) };
     },
     logout: async (_root: unknown, _args: any, context: any) => {
       clearAuthCookie(context.response);
@@ -1578,6 +2056,80 @@ const resolvers = {
       );
       return enrichWatchProgress(doc, true);
     },
+    createReleaseEvent: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const admin = await requireAdmin(context);
+      const input = normalizeReleaseInput(args.input, admin.id);
+      const duplicate = await ReleaseEvent.findOne(releaseDuplicateFilter(input));
+      if (duplicate) {
+        const doc = await ReleaseEvent.findByIdAndUpdate(
+          duplicate._id,
+          { $set: { ...input, createdBy: duplicate.createdBy } },
+          { new: true },
+        );
+        return mapReleaseEvent(doc);
+      }
+      const doc = await ReleaseEvent.create(input);
+      return mapReleaseEvent(doc);
+    },
+    updateReleaseEvent: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const admin = await requireAdmin(context);
+      const existing = await ReleaseEvent.findById(args.id);
+      if (!existing) throw new Error("Release nicht gefunden.");
+      const input = normalizeReleaseInput(
+        { ...existing.toObject(), ...args.input },
+        admin.id,
+        existing,
+      );
+      const duplicate = await ReleaseEvent.findOne(releaseDuplicateFilter(input, args.id));
+      if (duplicate) throw new Error("Dieser Release existiert bereits.");
+      const doc = await ReleaseEvent.findByIdAndUpdate(args.id, { $set: input }, { new: true });
+      return mapReleaseEvent(doc);
+    },
+    deleteReleaseEvent: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      await requireAdmin(context);
+      await ReleaseEvent.findByIdAndDelete(args.id);
+      return true;
+    },
+    bulkCreateReleaseEvents: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const admin = await requireAdmin(context);
+      const created = [];
+      for (const raw of args.inputs ?? []) {
+        const input = normalizeReleaseInput(raw, admin.id);
+        const duplicate = await ReleaseEvent.findOne(releaseDuplicateFilter(input));
+        if (duplicate) continue;
+        created.push(await ReleaseEvent.create(input));
+      }
+      return created.map((doc) => mapReleaseEvent(doc));
+    },
+    bulkUpdateReleaseEvents: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      const admin = await requireAdmin(context);
+      const docs = [];
+      for (const id of args.ids ?? []) {
+        const existing = await ReleaseEvent.findById(id);
+        if (!existing) continue;
+        const input = normalizeReleaseInput(
+          { ...existing.toObject(), ...args.input },
+          admin.id,
+          existing,
+        );
+        const duplicate = await ReleaseEvent.findOne(releaseDuplicateFilter(input, id));
+        if (duplicate) continue;
+        const doc = await ReleaseEvent.findByIdAndUpdate(id, { $set: input }, { new: true });
+        if (doc) docs.push(doc);
+      }
+      return docs.map((doc) => mapReleaseEvent(doc));
+    },
+    bulkDeleteReleaseEvents: async (_: unknown, args: any, context: any) => {
+      assertDb();
+      await requireAdmin(context);
+      await ReleaseEvent.deleteMany({ _id: { $in: args.ids ?? [] } });
+      return true;
+    },
   },
 };
 
@@ -1587,6 +2139,178 @@ function mapProvider(provider: any) {
     providerName: provider.provider_name,
     logoPath: provider.logo_path ?? null,
   };
+}
+
+function normalizeReleaseDateParts(input: any) {
+  const datePrecision: DatePrecision = DATE_PRECISIONS.includes(input.datePrecision)
+    ? input.datePrecision
+    : input.releaseDate
+      ? "EXACT"
+      : "UNKNOWN";
+  const releaseDate =
+    datePrecision === "EXACT" && input.releaseDate ? String(input.releaseDate) : null;
+  const parsedDate = releaseDate ? new Date(`${releaseDate}T00:00:00.000Z`) : null;
+  const exactYear =
+    parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getUTCFullYear() : null;
+  const exactMonth =
+    parsedDate && Number.isFinite(parsedDate.getTime()) ? parsedDate.getUTCMonth() + 1 : null;
+  const releaseYear =
+    datePrecision === "EXACT"
+      ? exactYear
+      : input.releaseYear
+        ? Number(input.releaseYear)
+        : exactYear;
+  const releaseMonth =
+    datePrecision === "EXACT"
+      ? exactMonth
+      : input.releaseMonth
+        ? Number(input.releaseMonth)
+        : exactMonth;
+  const releaseQuarter =
+    datePrecision === "QUARTER"
+      ? Number(input.releaseQuarter ?? Math.ceil(Number(releaseMonth ?? 1) / 3))
+      : releaseMonth
+        ? Math.ceil(Number(releaseMonth) / 3)
+        : input.releaseQuarter
+          ? Number(input.releaseQuarter)
+          : null;
+
+  return {
+    datePrecision,
+    releaseDate,
+    releaseYear: Number.isFinite(releaseYear) ? releaseYear : null,
+    releaseMonth: Number.isFinite(releaseMonth) ? releaseMonth : null,
+    releaseQuarter: Number.isFinite(releaseQuarter) ? releaseQuarter : null,
+  };
+}
+
+function normalizeReleaseInput(input: any, adminId: string, existing?: any) {
+  const releaseType: ReleaseType = RELEASE_TYPES.includes(input.releaseType)
+    ? input.releaseType
+    : "MOVIE_CATALOG";
+  const publicationStatus: PublicationStatus = PUBLICATION_STATUSES.includes(
+    input.publicationStatus,
+  )
+    ? input.publicationStatus
+    : "DRAFT";
+  const confirmationStatus: ConfirmationStatus = CONFIRMATION_STATUSES.includes(
+    input.confirmationStatus,
+  )
+    ? input.confirmationStatus
+    : "ANNOUNCED";
+  const dateParts = normalizeReleaseDateParts(input);
+  const provider = String(input.provider ?? existing?.provider ?? "").trim();
+  const region = String(input.region ?? existing?.region ?? "DE")
+    .trim()
+    .toUpperCase();
+
+  if (!input.tmdbId && !existing?.tmdbId) throw new Error("Titel fehlt.");
+  if (!provider) throw new Error("Streaming-Anbieter fehlt.");
+  if (!region) throw new Error("Region fehlt.");
+  if (dateParts.datePrecision === "EXACT" && !dateParts.releaseDate) {
+    throw new Error("Exaktes Datum fehlt.");
+  }
+
+  return {
+    tmdbId: Number(input.tmdbId ?? existing?.tmdbId),
+    mediaType: input.mediaType ?? existing?.mediaType,
+    title: String(input.title ?? existing?.title ?? "Untitled"),
+    posterPath: input.posterPath ?? existing?.posterPath ?? null,
+    backdropPath: input.backdropPath ?? existing?.backdropPath ?? null,
+    voteAverage: Number(input.voteAverage ?? existing?.voteAverage ?? 0),
+    popularity: Number(input.popularity ?? existing?.popularity ?? 0),
+    genreIds: input.genreIds ?? existing?.genreIds ?? [],
+    provider,
+    region,
+    releaseType,
+    publicationStatus,
+    confirmationStatus,
+    ...dateParts,
+    seasonNumber: input.seasonNumber == null ? null : Number(input.seasonNumber),
+    episodeNumber: input.episodeNumber == null ? null : Number(input.episodeNumber),
+    sourceUrl: input.sourceUrl?.trim?.() ? String(input.sourceUrl).trim() : null,
+    notes: input.notes ?? "",
+    lastVerifiedAt: input.lastVerifiedAt ? new Date(input.lastVerifiedAt) : null,
+    updatedBy: adminId,
+    ...(existing ? {} : { createdBy: adminId }),
+  };
+}
+
+function releaseDuplicateFilter(input: any, excludeId?: string) {
+  const filter: Record<string, unknown> = {
+    tmdbId: input.tmdbId,
+    mediaType: input.mediaType,
+    provider: input.provider,
+    region: input.region,
+    releaseType: input.releaseType,
+    datePrecision: input.datePrecision,
+    releaseDate: input.releaseDate ?? null,
+    releaseYear: input.releaseYear ?? null,
+    releaseMonth: input.releaseMonth ?? null,
+    releaseQuarter: input.releaseQuarter ?? null,
+    seasonNumber: input.seasonNumber ?? null,
+    episodeNumber: input.episodeNumber ?? null,
+    publicationStatus: { $ne: "ARCHIVED" },
+  };
+  if (excludeId) filter._id = { $ne: excludeId };
+  return filter;
+}
+
+function mapReleaseEvent(doc: any, watchlistMatches = new Set<string>()) {
+  const key = `${doc.mediaType}-${doc.tmdbId}`;
+  return {
+    id: doc._id.toString(),
+    tmdbId: doc.tmdbId,
+    mediaType: doc.mediaType,
+    title: doc.title,
+    posterPath: doc.posterPath ?? null,
+    backdropPath: doc.backdropPath ?? null,
+    voteAverage: doc.voteAverage ?? 0,
+    popularity: doc.popularity ?? 0,
+    genreIds: doc.genreIds ?? [],
+    provider: doc.provider,
+    region: doc.region,
+    releaseDate: doc.releaseDate ?? null,
+    datePrecision: doc.datePrecision,
+    releaseYear: doc.releaseYear ?? null,
+    releaseMonth: doc.releaseMonth ?? null,
+    releaseQuarter: doc.releaseQuarter ?? null,
+    releaseType: doc.releaseType,
+    publicationStatus: doc.publicationStatus,
+    confirmationStatus: doc.confirmationStatus,
+    seasonNumber: doc.seasonNumber ?? null,
+    episodeNumber: doc.episodeNumber ?? null,
+    sourceUrl: doc.sourceUrl ?? null,
+    notes: doc.notes ?? "",
+    createdBy: doc.createdBy,
+    updatedBy: doc.updatedBy,
+    createdAt: doc.createdAt?.getTime?.() ?? Date.now(),
+    updatedAt: doc.updatedAt?.getTime?.() ?? Date.now(),
+    isWatchlisted: watchlistMatches.has(key),
+  };
+}
+
+function buildReleaseFilter(args: any, publicOnly = true) {
+  const filter: Record<string, any> = {};
+  if (publicOnly) filter.publicationStatus = "PUBLISHED";
+  else if (args.publicationStatus) filter.publicationStatus = args.publicationStatus;
+  if (args.region) filter.region = String(args.region).toUpperCase();
+  if (args.providers?.length) filter.provider = { $in: args.providers };
+  if (args.mediaType) filter.mediaType = args.mediaType;
+  if (args.releaseTypes?.length) filter.releaseType = { $in: args.releaseTypes };
+  if (args.confirmationStatuses?.length)
+    filter.confirmationStatus = { $in: args.confirmationStatuses };
+  if (args.genreIds?.length) filter.genreIds = { $in: args.genreIds.map(Number) };
+  if (args.tmdbId) filter.tmdbId = Number(args.tmdbId);
+  if (args.datePrecision) filter.datePrecision = args.datePrecision;
+  if (args.year) filter.releaseYear = Number(args.year);
+  if (args.month) filter.releaseMonth = Number(args.month);
+  if (args.fromDate || args.toDate) {
+    filter.releaseDate = {};
+    if (args.fromDate) filter.releaseDate.$gte = args.fromDate;
+    if (args.toDate) filter.releaseDate.$lte = args.toDate;
+  }
+  return filter;
 }
 
 const app = express();
@@ -1609,7 +2333,7 @@ app.get("/health", (_request, response) => {
 
 app.get("/api/me", async (request, response) => {
   const user = getAuthUserFromRequest(request as any);
-  response.json({ user: user ? { id: user.id, name: user.name, email: user.email } : null });
+  response.json({ user: user ? await getUserProfile(user) : null });
 });
 
 app.post("/api/register", async (request, response) => {
@@ -1636,10 +2360,15 @@ app.post("/api/register", async (request, response) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ name, email, passwordHash });
+    const user = await User.create({
+      name,
+      email,
+      passwordHash,
+      role: isAdminEmail(email) ? "ADMIN" : "USER",
+    });
     const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
     setAuthCookie(response, safeUser);
-    response.json({ user: safeUser });
+    response.json({ user: await getUserProfile(safeUser) });
   } catch (error: any) {
     response.status(400).json({ error: error.message ?? "Registrierung fehlgeschlagen." });
   }
@@ -1667,7 +2396,7 @@ app.post("/api/login", async (request, response) => {
 
     const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
     setAuthCookie(response, safeUser);
-    response.json({ user: safeUser });
+    response.json({ user: await getUserProfile(safeUser) });
   } catch (error: any) {
     response.status(400).json({ error: error.message ?? "Login fehlgeschlagen." });
   }

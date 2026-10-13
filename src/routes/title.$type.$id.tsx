@@ -18,6 +18,7 @@ import { useAuth } from "@/lib/auth-context";
 import { getDetails, getSeasonDetails, type EpisodeInfo } from "@/lib/tmdb.functions";
 import { useWatchlist, useRatings, useWatchProgress, type WatchStatus } from "@/lib/user-data";
 import { Link } from "@/lib/navigation";
+import { getReleaseEventsByTitle } from "@/lib/release-calendar";
 
 const STATUS_LABELS: Record<WatchStatus, string> = {
   PLAN_TO_WATCH: "Geplant",
@@ -190,6 +191,11 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
     enabled: media === "tv" && Boolean(d && selectedSeason),
     queryFn: () =>
       getSeasonDetails({ data: { tvId: id, seasonNumber: selectedSeason!, userId: user?.id } }),
+    staleTime: 1000 * 60 * 10,
+  });
+  const releaseQ = useQuery({
+    queryKey: ["release-events-title", media, id],
+    queryFn: () => getReleaseEventsByTitle({ tmdbId: id, mediaType: media, region: "AT" }),
     staleTime: 1000 * 60 * 10,
   });
 
@@ -404,6 +410,30 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                       Fortschritt zurücksetzen
                     </button>
                   )}
+                </div>
+              )}
+
+              {releaseQ.data && releaseQ.data.length > 0 && (
+                <div className="max-w-xl rounded-2xl border border-primary/35 bg-primary/10 p-4">
+                  <h3 className="text-sm font-bold text-primary">Nächster Streamingstart</h3>
+                  <p className="mt-1 text-sm text-foreground/90">
+                    {releaseQ.data[0].provider} ·{" "}
+                    {releaseQ.data[0].release_date
+                      ? new Date(`${releaseQ.data[0].release_date}T00:00:00`).toLocaleDateString()
+                      : "Coming soon"}
+                    {releaseQ.data[0].season_number
+                      ? ` · Staffel ${releaseQ.data[0].season_number}`
+                      : ""}
+                    {releaseQ.data[0].episode_number
+                      ? ` Episode ${releaseQ.data[0].episode_number}`
+                      : ""}
+                  </p>
+                  <Link
+                    href="/calendar"
+                    className="mt-2 inline-block text-xs font-semibold text-primary hover:underline"
+                  >
+                    Im BingeCalendar ansehen
+                  </Link>
                 </div>
               )}
 
