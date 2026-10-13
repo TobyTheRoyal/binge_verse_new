@@ -18,6 +18,35 @@ const SORTS = [
   { v: "primary_release_date.desc", l: "Neueste" },
   { v: "primary_release_date.asc", l: "Älteste" },
 ];
+const LANGUAGES = [
+  { v: "en", l: "Englisch" },
+  { v: "de", l: "Deutsch" },
+  { v: "es", l: "Spanisch" },
+  { v: "ko", l: "Koreanisch" },
+  { v: "ja", l: "Japanisch" },
+  { v: "fr", l: "Französisch" },
+  { v: "it", l: "Italienisch" },
+  { v: "tr", l: "Türkisch" },
+  { v: "hi", l: "Hindi" },
+  { v: "zh", l: "Chinesisch" },
+  { v: "pt", l: "Portugiesisch" },
+  { v: "ar", l: "Arabisch" },
+  { v: "ru", l: "Russisch" },
+  { v: "sv", l: "Schwedisch" },
+  { v: "da", l: "Dänisch" },
+  { v: "nl", l: "Niederländisch" },
+];
+const TV_ROMANCE_GENRE = { id: "keyword:9840", name: "Romantik" };
+const STREAMING_PROVIDERS_AT = [
+  { v: "8", l: "Netflix" },
+  { v: "337", l: "Disney+" },
+  { v: "350", l: "Apple TV+" },
+  { v: "29|30", l: "Sky / WOW" },
+  { v: "1899", l: "HBO Max" },
+  { v: "2750", l: "RTL+" },
+  { v: "531", l: "Paramount+" },
+  { v: "9", l: "Amazon Prime Video" },
+];
 
 export function BrowsePage() {
   const navigate = useNavigate();
@@ -27,6 +56,8 @@ export function BrowsePage() {
   const genre = searchParams.get("genre") ?? undefined;
   const year = searchParams.get("year") ?? undefined;
   const sort = searchParams.get("sort") ?? undefined;
+  const language = searchParams.get("language") ?? undefined;
+  const provider = searchParams.get("provider") ?? undefined;
   const [text, setText] = useState(q);
   const [suggestions, setSuggestions] = useState<MediaItem[]>([]);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -63,13 +94,24 @@ export function BrowsePage() {
   });
 
   const isSearch = Boolean(q.trim());
+  const genreOptions = useMemo(() => {
+    const base =
+      genresQ.data?.map((genre) => ({
+        id: String(genre.id),
+        name: genre.id === 10749 ? "Romantik" : genre.name,
+      })) ?? [];
+
+    if (type !== "tv" || base.some((genre) => genre.name === TV_ROMANCE_GENRE.name)) return base;
+
+    return [...base, TV_ROMANCE_GENRE].sort((a, b) => a.name.localeCompare(b.name, "de"));
+  }, [genresQ.data, type]);
 
   const resultsQ = useInfiniteQuery({
-    queryKey: ["browse", { q, type, genre, year, sort }],
+    queryKey: ["browse", { q, type, genre, year, sort, language, provider }],
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       if (isSearch) {
-        return searchMultiPage({ data: { query: q, page: pageParam } });
+        return searchMultiPage({ data: { query: q, page: pageParam, language } });
       }
 
       return discoverPage({
@@ -79,6 +121,8 @@ export function BrowsePage() {
           year,
           sort_by: sort,
           page: pageParam,
+          language,
+          provider,
         },
       });
     },
@@ -246,8 +290,8 @@ export function BrowsePage() {
                 className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
               >
                 <option value="">Alle Genres</option>
-                {genresQ.data?.map((g) => (
-                  <option key={g.id} value={String(g.id)}>
+                {genreOptions.map((g) => (
+                  <option key={g.id} value={g.id}>
                     {g.name}
                   </option>
                 ))}
@@ -262,6 +306,32 @@ export function BrowsePage() {
                 {YEARS.map((y) => (
                   <option key={y} value={y}>
                     {y}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={language ?? ""}
+                onChange={(event) => update({ language: event.target.value || undefined })}
+                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+              >
+                <option value="">Alle Sprachen</option>
+                {LANGUAGES.map((language) => (
+                  <option key={language.v} value={language.v}>
+                    {language.l}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={provider ?? ""}
+                onChange={(event) => update({ provider: event.target.value || undefined })}
+                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+              >
+                <option value="">Alle Streamingdienste AT</option>
+                {STREAMING_PROVIDERS_AT.map((provider) => (
+                  <option key={provider.v} value={provider.v}>
+                    {provider.l}
                   </option>
                 ))}
               </select>

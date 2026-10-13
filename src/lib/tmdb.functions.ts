@@ -325,11 +325,15 @@ function rankSearchResults(results: MediaItem[], query: string) {
   });
 }
 
-export async function searchMulti({ data }: { data: { query: string; page?: number } }) {
+export async function searchMulti({
+  data,
+}: {
+  data: { query: string; page?: number; language?: string };
+}) {
   const result = await graphqlClient.request<any>(
     `
-      query Search($query: String!, $page: Int) {
-        search(query: $query, page: $page) { ${MEDIA_FIELDS} }
+      query Search($query: String!, $page: Int, $language: String) {
+        search(query: $query, page: $page, language: $language) { ${MEDIA_FIELDS} }
       }
     `,
     data,
@@ -339,11 +343,15 @@ export async function searchMulti({ data }: { data: { query: string; page?: numb
   return { results: rankSearchResults(items, data.query), total: items.length };
 }
 
-export async function searchMultiPage({ data }: { data: { query: string; page?: number } }) {
+export async function searchMultiPage({
+  data,
+}: {
+  data: { query: string; page?: number; language?: string };
+}) {
   const result = await graphqlClient.request<any>(
     `
-      query SearchPage($query: String!, $page: Int) {
-        searchPage(query: $query, page: $page) {
+      query SearchPage($query: String!, $page: Int, $language: String) {
+        searchPage(query: $query, page: $page, language: $language) {
           page
           totalPages
           totalResults
@@ -380,12 +388,20 @@ export async function searchSuggestions({ data }: { data: { query: string; limit
 export async function discover({
   data,
 }: {
-  data: { media: Media; genre?: string; year?: string; sort_by?: string; page?: number };
+  data: {
+    media: Media;
+    genre?: string;
+    year?: string;
+    sort_by?: string;
+    page?: number;
+    language?: string;
+    provider?: string;
+  };
 }) {
   const result = await graphqlClient.request<any>(
     `
-      query Discover($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int) {
-        discover(media: $media, genre: $genre, year: $year, sort: $sort, page: $page) { ${MEDIA_FIELDS} }
+      query Discover($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int, $language: String, $provider: String) {
+        discover(media: $media, genre: $genre, year: $year, sort: $sort, page: $page, language: $language, provider: $provider) { ${MEDIA_FIELDS} }
       }
     `,
     {
@@ -394,6 +410,8 @@ export async function discover({
       year: data.year,
       sort: data.sort_by,
       page: data.page,
+      language: data.language,
+      provider: data.provider,
     },
   );
 
@@ -403,12 +421,20 @@ export async function discover({
 export async function discoverPage({
   data,
 }: {
-  data: { media: Media; genre?: string; year?: string; sort_by?: string; page?: number };
+  data: {
+    media: Media;
+    genre?: string;
+    year?: string;
+    sort_by?: string;
+    page?: number;
+    language?: string;
+    provider?: string;
+  };
 }) {
   const result = await graphqlClient.request<any>(
     `
-      query DiscoverPage($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int) {
-        discoverPage(media: $media, genre: $genre, year: $year, sort: $sort, page: $page) {
+      query DiscoverPage($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int, $language: String, $provider: String) {
+        discoverPage(media: $media, genre: $genre, year: $year, sort: $sort, page: $page, language: $language, provider: $provider) {
           page
           totalPages
           totalResults
@@ -422,6 +448,8 @@ export async function discoverPage({
       year: data.year,
       sort: data.sort_by,
       page: data.page,
+      language: data.language,
+      provider: data.provider,
     },
   );
 

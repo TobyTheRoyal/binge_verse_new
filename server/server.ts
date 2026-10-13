@@ -34,6 +34,7 @@ type DatePrecision = "EXACT" | "MONTH" | "QUARTER" | "YEAR" | "UNKNOWN";
 type TmdbMedia = {
   id: number;
   media_type?: MediaType;
+  original_language?: string;
   title?: string;
   name?: string;
   poster_path?: string | null;
@@ -1301,16 +1302,26 @@ const typeDefs = /* GraphQL */ `
   type Query {
     me: UserProfile
     home: HomeData!
-    discover(media: MediaType!, genre: String, year: String, sort: String, page: Int): [MediaItem!]!
+    discover(
+      media: MediaType!
+      genre: String
+      year: String
+      sort: String
+      page: Int
+      language: String
+      provider: String
+    ): [MediaItem!]!
     discoverPage(
       media: MediaType!
       genre: String
       year: String
       sort: String
       page: Int
+      language: String
+      provider: String
     ): MediaItemConnection!
-    search(query: String!, page: Int): [MediaItem!]!
-    searchPage(query: String!, page: Int): MediaItemConnection!
+    search(query: String!, page: Int, language: String): [MediaItem!]!
+    searchPage(query: String!, page: Int, language: String): MediaItemConnection!
     searchSuggestions(query: String!, limit: Int): [MediaItem!]!
     genres(media: MediaType!): [Genre!]!
     details(media: MediaType!, id: Int!, userId: String): MovieDetails!
@@ -1422,6 +1433,16 @@ const resolvers = {
       };
 
       if (args.genre) params.with_genres = args.genre;
+      if (typeof args.genre === "string" && args.genre.startsWith("keyword:")) {
+        delete params.with_genres;
+        params.with_keywords = args.genre.slice("keyword:".length);
+      }
+      if (args.language) params.with_original_language = args.language;
+      if (args.provider) {
+        params.watch_region = "AT";
+        params.with_watch_providers = args.provider;
+        params.with_watch_monetization_types = "flatrate";
+      }
       if (args.year) {
         if (args.media === "movie") params.primary_release_year = args.year;
         else params.first_air_date_year = args.year;
@@ -1444,6 +1465,16 @@ const resolvers = {
       };
 
       if (args.genre) params.with_genres = args.genre;
+      if (typeof args.genre === "string" && args.genre.startsWith("keyword:")) {
+        delete params.with_genres;
+        params.with_keywords = args.genre.slice("keyword:".length);
+      }
+      if (args.language) params.with_original_language = args.language;
+      if (args.provider) {
+        params.watch_region = "AT";
+        params.with_watch_providers = args.provider;
+        params.with_watch_monetization_types = "flatrate";
+      }
       if (args.year) {
         if (args.media === "movie") params.primary_release_year = args.year;
         else params.first_air_date_year = args.year;
@@ -1468,7 +1499,11 @@ const resolvers = {
       });
 
       return (result.results ?? [])
-        .filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv")
+        .filter(
+          (item: TmdbMedia) =>
+            (item.media_type === "movie" || item.media_type === "tv") &&
+            (!args.language || item.original_language === args.language),
+        )
         .map((item: TmdbMedia) => normalizeMedia(item))
         .filter((item: any) => item.posterPath);
     },
@@ -1482,9 +1517,13 @@ const resolvers = {
         page,
         include_adult: false,
       });
+      const filteredResults = (result.results ?? []).filter(
+        (item: TmdbMedia) =>
+          (item.media_type === "movie" || item.media_type === "tv") &&
+          (!args.language || item.original_language === args.language),
+      );
       return {
-        results: (result.results ?? [])
-          .filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv")
+        results: filteredResults
           .map((item: TmdbMedia) => normalizeMedia(item))
           .filter((item: any) => item.posterPath),
         page: result.page ?? page,
