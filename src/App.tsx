@@ -6,6 +6,7 @@ import { BrowsePage } from "./routes/browse";
 import { CalendarPage } from "./routes/calendar";
 import { HistoryPage } from "./routes/history";
 import { HomePage } from "./routes";
+import { TasteDnaPage } from "./routes/taste-dna";
 import { DetailPage } from "./routes/title.$type.$id";
 import { WatchlistPage } from "./routes/watchlist";
 
@@ -21,6 +22,7 @@ export function App() {
   else if (pathname === "/auth") page = <AuthPage />;
   else if (pathname === "/watchlist") page = <WatchlistPage />;
   else if (pathname === "/history") page = <HistoryPage />;
+  else if (pathname === "/taste-dna") page = <TasteDnaPage />;
   else if (detailMatch)
     page = <DetailPage media={detailMatch[1] as "movie" | "tv"} id={Number(detailMatch[2])} />;
 

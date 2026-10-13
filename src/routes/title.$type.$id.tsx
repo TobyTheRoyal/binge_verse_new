@@ -14,6 +14,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { TMDB_IMG, posterUrl, MediaCard } from "@/components/MediaCard";
+import { MatchScore } from "@/components/MatchScore";
 import { useAuth } from "@/lib/auth-context";
 import { getDetails, getSeasonDetails, type EpisodeInfo } from "@/lib/tmdb.functions";
 import { useWatchlist, useRatings, useWatchProgress, type WatchStatus } from "@/lib/user-data";
@@ -301,6 +302,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
               </div>
 
               <div className="flex flex-wrap items-center gap-4 text-sm">
+                {d.match_score && <MatchScore score={d.match_score} size="large" />}
                 {displayedRating > 0 && (
                   <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--color-gold)]/15 border border-[var(--color-gold)]/30">
                     <Star className="size-4 text-[var(--color-gold)] fill-[var(--color-gold)]" />
@@ -337,6 +339,19 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                   </div>
                 )}
               </div>
+
+              {d.match_score && d.match_score.reasons.length > 0 && (
+                <details className="max-w-xl rounded-2xl border border-border bg-surface/80 p-4">
+                  <summary className="cursor-pointer text-sm font-bold">
+                    Warum dieser Match?
+                  </summary>
+                  <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
+                    {d.match_score.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
 
               <div className="flex flex-wrap gap-2">
                 {d.genres.map((g) => (

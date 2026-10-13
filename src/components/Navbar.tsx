@@ -73,6 +73,9 @@ export function Navbar() {
               <Link href="/history" className={navClass("/history")}>
                 History
               </Link>
+              <Link href="/taste-dna" className={navClass("/taste-dna")}>
+                TasteDNA
+              </Link>
               {user.isAdmin && (
                 <Link href="/admin" className={navClass("/admin")}>
                   Admin

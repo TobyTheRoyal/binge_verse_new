@@ -1,4 +1,4 @@
-import type { Media, MediaItem } from "./tmdb.functions";
+import type { MatchScore, Media, MediaItem } from "./tmdb.functions";
 
 export type ReleaseType =
   | "CINEMA_RELEASE"
@@ -42,6 +42,7 @@ export interface ReleaseEvent {
   created_at: number;
   updated_at: number;
   is_watchlisted: boolean;
+  match_score?: MatchScore | null;
 }
 
 export interface ReleaseFilters {
@@ -117,6 +118,7 @@ interface ReleaseEventResponse {
   createdAt: number;
   updatedAt: number;
   isWatchlisted: boolean;
+  matchScore?: MatchScore | null;
 }
 
 interface ReleaseConnectionResponse {
@@ -161,6 +163,14 @@ const releaseFields = `
   createdAt
   updatedAt
   isWatchlisted
+  matchScore {
+    score
+    label
+    color
+    confidence
+    reasons
+    insufficientData
+  }
 `;
 
 async function requestReleaseGraphql<T>(
@@ -213,6 +223,7 @@ function fromRelease(raw: ReleaseEventResponse): ReleaseEvent {
     created_at: raw.createdAt,
     updated_at: raw.updatedAt,
     is_watchlisted: Boolean(raw.isWatchlisted),
+    match_score: raw.matchScore ?? null,
   };
 }
 

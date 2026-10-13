@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Play, Info, Star, Loader2 } from "lucide-react";
 import { TMDB_IMG, posterUrl } from "@/components/MediaCard";
 import { MediaRow } from "@/components/MediaRow";
+import { MatchScore } from "@/components/MatchScore";
 import { RecommendedRow } from "@/components/RecommendedRow";
 import { getHomeData } from "@/lib/home.functions";
 import { Link } from "@/lib/navigation";
@@ -12,6 +13,7 @@ import {
   type ReleaseEvent,
 } from "@/lib/release-calendar";
 import { useAuth } from "@/lib/auth-context";
+import { getTasteDna } from "@/lib/taste-dna";
 
 function ContinueWatchingRow() {
   const { items, loading } = useContinueWatching();
@@ -96,6 +98,11 @@ function ReleaseMiniCard({ item }: { item: ReleaseEvent }) {
       <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
         {item.provider}
       </div>
+      {item.match_score && (
+        <div className="mt-2">
+          <MatchScore score={item.match_score} />
+        </div>
+      )}
     </Link>
   );
 }
@@ -160,6 +167,31 @@ function ComingSoonStreamingRow() {
           </div>
         </section>
       )}
+    </>
+  );
+}
+
+function PersonalizedTasteRows() {
+  const { user } = useAuth();
+  const { data } = useQuery({
+    queryKey: ["home-taste-dna", user?.id],
+    enabled: Boolean(user),
+    queryFn: () => getTasteDna(),
+  });
+
+  const sections = data?.recommendations.filter((section) => section.items.length) ?? [];
+  if (!sections.length) return null;
+
+  return (
+    <>
+      {sections.slice(0, 2).map((section) => (
+        <MediaRow
+          key={section.title}
+          title={section.title}
+          subtitle={section.subtitle ?? undefined}
+          items={section.items}
+        />
+      ))}
     </>
   );
 }
@@ -249,6 +281,7 @@ export function HomePage() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 mt-10 space-y-12">
         <ContinueWatchingRow />
         <ComingSoonStreamingRow />
+        <PersonalizedTasteRows />
         <RecommendedRow />
         <MediaRow
           title="Trending heute"

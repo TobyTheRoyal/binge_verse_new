@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { posterUrl } from "@/components/MediaCard";
+import { MatchScore } from "@/components/MatchScore";
 import { useAuth } from "@/lib/auth-context";
 import { Link } from "@/lib/navigation";
 import { useWatchlist } from "@/lib/user-data";
@@ -129,6 +130,11 @@ function ReleaseCard({
         </p>
         {item.is_watchlisted && (
           <p className="mt-2 text-xs font-semibold text-primary">Aus deiner Watchlist</p>
+        )}
+        {item.match_score && (
+          <div className="mt-2">
+            <MatchScore score={item.match_score} />
+          </div>
         )}
       </div>
     </div>

@@ -236,6 +236,42 @@ releaseEventSchema.index({
   episodeNumber: 1,
 });
 
+const tasteProfileSchema = new Schema(
+  {
+    userId: { type: String, required: true, unique: true, index: true },
+    sourceHash: { type: String, required: true, index: true },
+    computedAt: { type: Date, required: true, default: Date.now, index: true },
+    ratingCount: { type: Number, required: true, default: 0 },
+    confidence: { type: Number, required: true, default: 0 },
+    averageRating: { type: Number, required: true, default: 0 },
+    summary: { type: String, default: "" },
+    favoriteMediaType: { type: String, default: null },
+    genrePreferences: { type: [Schema.Types.Mixed], default: [] },
+    actorPreferences: { type: [Schema.Types.Mixed], default: [] },
+    directorPreferences: { type: [Schema.Types.Mixed], default: [] },
+    storyPreferences: { type: [Schema.Types.Mixed], default: [] },
+    excludedGenres: { type: [Number], default: [] },
+    useViewingSignals: { type: Boolean, default: true },
+  },
+  { timestamps: true },
+);
+
+tasteProfileSchema.index({ userId: 1, computedAt: -1 });
+
+const storyDnaSchema = new Schema(
+  {
+    tmdbId: { type: Number, required: true },
+    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
+    themes: { type: [String], default: [] },
+    source: { type: String, required: true, default: "tmdb-keywords" },
+    confidence: { type: Number, required: true, default: 0 },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true },
+);
+
+storyDnaSchema.index({ tmdbId: 1, mediaType: 1 }, { unique: true });
+
 const Rating = mongoose.models.Rating || mongoose.model("Rating", ratingSchema);
 const WatchlistItem =
   mongoose.models.WatchlistItem || mongoose.model("WatchlistItem", watchlistSchema);
@@ -245,6 +281,9 @@ const EpisodeProgress =
   mongoose.models.EpisodeProgress || mongoose.model("EpisodeProgress", episodeProgressSchema);
 const ReleaseEvent =
   mongoose.models.ReleaseEvent || mongoose.model("ReleaseEvent", releaseEventSchema);
+const TasteProfile =
+  mongoose.models.TasteProfile || mongoose.model("TasteProfile", tasteProfileSchema);
+const StoryDna = mongoose.models.StoryDna || mongoose.model("StoryDna", storyDnaSchema);
 
 function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
   const mediaType = raw.media_type ?? fallbackMedia ?? (raw.title ? "movie" : "tv");
@@ -266,6 +305,512 @@ function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
 
 type NormalizedMedia = ReturnType<typeof normalizeMedia>;
 type SearchSuggestionCandidate = NormalizedMedia & { suggestionSourceRank?: number };
+
+type TastePreference = {
+  id: string;
+  name: string;
+  score: number;
+  observations: number;
+  averageRating: number;
+};
+
+type BuiltTasteProfile = {
+  userId: string;
+  sourceHash: string;
+  computedAt: Date;
+  ratingCount: number;
+  confidence: number;
+  averageRating: number;
+  summary: string;
+  favoriteMediaType: MediaType | null;
+  genrePreferences: TastePreference[];
+  actorPreferences: TastePreference[];
+  directorPreferences: TastePreference[];
+  storyPreferences: TastePreference[];
+  excludedGenres: number[];
+  useViewingSignals: boolean;
+};
+
+type MatchScoreResult = {
+  score: number | null;
+  label: string;
+  color: string;
+  confidence: number;
+  reasons: string[];
+  insufficientData: boolean;
+};
+
+const GENRE_NAMES: Record<number, string> = {
+  12: "Abenteuer",
+  14: "Fantasy",
+  16: "Animation",
+  18: "Drama",
+  27: "Horror",
+  28: "Action",
+  35: "Komödie",
+  36: "Historie",
+  37: "Western",
+  53: "Thriller",
+  80: "Krimi",
+  99: "Dokumentarfilm",
+  878: "Science Fiction",
+  9648: "Mystery",
+  10402: "Musik",
+  10749: "Romantik",
+  10751: "Familie",
+  10752: "Kriegsfilm",
+  10759: "Action & Adventure",
+  10762: "Kids",
+  10763: "News",
+  10764: "Reality",
+  10765: "Sci-Fi & Fantasy",
+  10766: "Soap",
+  10767: "Talk",
+  10768: "War & Politics",
+  10770: "TV-Film",
+};
+
+const STORY_TAXONOMY = [
+  {
+    id: "revenge-justice",
+    name: "Revenge & Justice",
+    keywords: ["revenge", "vengeance", "justice", "vigilante", "retribution"],
+  },
+  {
+    id: "betrayal",
+    name: "Betrayal",
+    keywords: ["betrayal", "traitor", "deception", "double cross"],
+  },
+  {
+    id: "survival",
+    name: "Survival",
+    keywords: ["survival", "survivor", "apocalypse", "stranded", "disaster"],
+  },
+  {
+    id: "investigation",
+    name: "Crime Investigation",
+    keywords: ["investigation", "detective", "murder", "serial killer", "case", "crime"],
+  },
+  {
+    id: "psychological-mystery",
+    name: "Psychological Mystery",
+    keywords: ["psychological", "mind game", "mystery", "paranoia", "manipulation"],
+  },
+  {
+    id: "time-travel",
+    name: "Time Travel",
+    keywords: ["time travel", "time loop", "timeline", "alternate reality"],
+  },
+  {
+    id: "political-intrigue",
+    name: "Political Intrigue",
+    keywords: ["political", "conspiracy", "government", "cover-up", "espionage"],
+  },
+  {
+    id: "transformation",
+    name: "Training & Transformation",
+    keywords: ["training", "transformation", "underdog", "coming of age", "mentor"],
+  },
+  {
+    id: "family-conflict",
+    name: "Family Conflict",
+    keywords: ["family", "parent", "sibling", "inheritance", "marriage"],
+  },
+  {
+    id: "dark-atmosphere",
+    name: "Dark Atmosphere",
+    keywords: ["dark", "noir", "bleak", "gritty", "disturbing"],
+  },
+  {
+    id: "romance",
+    name: "Romance",
+    keywords: ["romance", "love", "relationship", "couple", "heartbreak"],
+  },
+];
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function matchScoreMeta(score: number | null) {
+  if (score == null) return { label: "TasteMatch freischalten", color: "neutral" };
+  if (score >= 90) return { label: "Excellent Match", color: "dark-green" };
+  if (score >= 75) return { label: "Very Good Match", color: "light-green" };
+  if (score >= 60) return { label: "Good Match", color: "yellow" };
+  if (score >= 40) return { label: "Moderate Match", color: "orange" };
+  return { label: "Low Match", color: "red" };
+}
+
+function mediaDateValue(item: any) {
+  const value = item.releaseDate ?? item.release_date ?? item.first_air_date ?? null;
+  return value ? new Date(value).getTime() || 0 : 0;
+}
+
+function extractStoryThemes(raw: any) {
+  const keywords = [
+    ...((raw.keywords?.keywords ?? raw.keywords?.results ?? []) as any[]).map((item) =>
+      String(item.name ?? "").toLowerCase(),
+    ),
+    String(raw.overview ?? "").toLowerCase(),
+    String(raw.tagline ?? "").toLowerCase(),
+  ].join(" ");
+
+  return STORY_TAXONOMY.filter((theme) =>
+    theme.keywords.some((keyword) => keywords.includes(keyword)),
+  ).map((theme) => ({ id: theme.id, name: theme.name }));
+}
+
+async function fetchTasteDetails(mediaType: MediaType, tmdbId: number) {
+  const raw = await tmdb<any>(`/${mediaType}/${tmdbId}`, {
+    append_to_response: "credits,keywords",
+  });
+  const crew = raw.credits?.crew ?? [];
+  const directors =
+    mediaType === "movie"
+      ? crew
+          .filter((member: any) => member.job === "Director")
+          .map((member: any) => ({ id: String(member.id), name: member.name }))
+      : (raw.created_by ?? []).map((member: any) => ({ id: String(member.id), name: member.name }));
+
+  return {
+    genres: (raw.genres ?? []).map((genre: any) => ({
+      id: Number(genre.id),
+      name: genre.id === 10749 ? "Romantik" : genre.name,
+    })),
+    cast: (raw.credits?.cast ?? []).slice(0, 8).map((member: any, index: number) => ({
+      id: String(member.id),
+      name: member.name,
+      weight: index < 3 ? 1 : 0.55,
+    })),
+    directors,
+    storyThemes: extractStoryThemes(raw),
+    runtime: raw.runtime ?? raw.episode_run_time?.[0] ?? 0,
+    numberOfEpisodes: raw.number_of_episodes ?? 0,
+  };
+}
+
+function addPreference(
+  map: Map<
+    string,
+    { id: string; name: string; total: number; ratingTotal: number; observations: number }
+  >,
+  id: string | number,
+  name: string,
+  affinity: number,
+  rating: number,
+  weight = 1,
+) {
+  const key = String(id);
+  const current = map.get(key) ?? {
+    id: key,
+    name,
+    total: 0,
+    ratingTotal: 0,
+    observations: 0,
+  };
+  current.total += affinity * weight;
+  current.ratingTotal += rating * weight;
+  current.observations += weight;
+  map.set(key, current);
+}
+
+function preferenceList(
+  map: Map<
+    string,
+    { id: string; name: string; total: number; ratingTotal: number; observations: number }
+  >,
+  minObservations: number,
+  limit: number,
+) {
+  return [...map.values()]
+    .filter((item) => item.observations >= minObservations)
+    .map((item) => {
+      const confidence = clamp(item.observations / 5, 0.25, 1);
+      return {
+        id: item.id,
+        name: item.name,
+        score: Math.round(clamp(50 + item.total * 12 * confidence, 0, 100)),
+        observations: Math.round(item.observations),
+        averageRating: Number((item.ratingTotal / Math.max(item.observations, 1)).toFixed(1)),
+      };
+    })
+    .sort((a, b) => b.score - a.score || b.observations - a.observations)
+    .slice(0, limit);
+}
+
+async function tasteSourceHash(userId: string) {
+  const [ratings, progress] = await Promise.all([
+    Rating.find({ userId }).select("tmdbId mediaType seasonNumber rating updatedAt").lean(),
+    WatchProgress.find({ userId })
+      .select("tmdbId mediaType status updatedAt lastActivityAt")
+      .lean(),
+  ]);
+  return JSON.stringify({
+    ratings: ratings.map((rating: any) => [
+      rating.tmdbId,
+      rating.mediaType,
+      rating.seasonNumber ?? null,
+      rating.rating,
+      new Date(rating.updatedAt ?? 0).getTime(),
+    ]),
+    progress: progress.map((item: any) => [
+      item.tmdbId,
+      item.mediaType,
+      item.status,
+      new Date(item.updatedAt ?? item.lastActivityAt ?? 0).getTime(),
+    ]),
+  });
+}
+
+async function buildTasteProfile(userId: string, force = false): Promise<BuiltTasteProfile> {
+  assertDb();
+  const sourceHash = await tasteSourceHash(userId);
+  if (!force) {
+    const cached = await TasteProfile.findOne({ userId, sourceHash }).lean();
+    if (cached) return cached as unknown as BuiltTasteProfile;
+  }
+
+  const ratings = await Rating.find({ userId }).sort({ updatedAt: -1 }).lean();
+  const usableRatings = ratings.filter((rating: any) => rating.seasonNumber == null);
+  const ratingCount = usableRatings.length;
+  const averageRating =
+    usableRatings.reduce((sum: number, item: any) => sum + Number(item.rating ?? 0), 0) /
+    Math.max(ratingCount, 1);
+
+  const genreMap = new Map<string, any>();
+  const actorMap = new Map<string, any>();
+  const directorMap = new Map<string, any>();
+  const storyMap = new Map<string, any>();
+  const mediaTypeCounts = new Map<MediaType, number>();
+
+  const details = await Promise.all(
+    usableRatings.slice(0, 80).map(async (rating: any) => {
+      try {
+        return { rating, details: await fetchTasteDetails(rating.mediaType, rating.tmdbId) };
+      } catch {
+        return { rating, details: null };
+      }
+    }),
+  );
+
+  for (const entry of details) {
+    if (!entry.details) continue;
+    const rating = Number(entry.rating.rating ?? 0);
+    const affinity = clamp((rating - averageRating) / 1.8, -2, 2);
+    mediaTypeCounts.set(
+      entry.rating.mediaType,
+      (mediaTypeCounts.get(entry.rating.mediaType) ?? 0) + 1,
+    );
+
+    for (const genre of entry.details.genres)
+      addPreference(genreMap, genre.id, genre.name, affinity, rating);
+    for (const actor of entry.details.cast) {
+      addPreference(actorMap, actor.id, actor.name, affinity, rating, actor.weight);
+    }
+    for (const director of entry.details.directors) {
+      addPreference(directorMap, director.id, director.name, affinity, rating);
+    }
+    for (const theme of entry.details.storyThemes) {
+      addPreference(storyMap, theme.id, theme.name, affinity, rating);
+    }
+  }
+
+  const genrePreferences = preferenceList(genreMap, 1, 12);
+  const actorPreferences = preferenceList(actorMap, 2, 10);
+  const directorPreferences = preferenceList(directorMap, 1.5, 8);
+  const storyPreferences = preferenceList(storyMap, 1, 10);
+  const excludedGenres = genrePreferences
+    .filter((genre) => genre.score < 35 && genre.observations >= 2)
+    .map((genre) => Number(genre.id))
+    .filter(Number.isFinite);
+  const favoriteMediaType: MediaType =
+    (mediaTypeCounts.get("movie") ?? 0) >= (mediaTypeCounts.get("tv") ?? 0) ? "movie" : "tv";
+  const confidence = clamp(Math.round((ratingCount / 12) * 100), 0, 100);
+  const topWords = [
+    ...genrePreferences
+      .filter((item) => item.score >= 65)
+      .slice(0, 3)
+      .map((item) => item.name),
+    ...storyPreferences
+      .filter((item) => item.score >= 65)
+      .slice(0, 2)
+      .map((item) => item.name),
+  ];
+  const summary =
+    ratingCount < 3
+      ? "Bewerte mehr Filme und Serien, damit BingeVerse deinen Geschmack zuverlässig erkennen kann."
+      : topWords.length
+        ? `Dein Geschmack tendiert stark zu ${topWords.join(", ")}.`
+        : "Dein TasteDNA-Profil ist noch breit gefächert und wird mit weiteren Bewertungen genauer.";
+
+  const profile: BuiltTasteProfile = {
+    userId,
+    sourceHash,
+    computedAt: new Date(),
+    ratingCount,
+    confidence,
+    averageRating: Number(averageRating.toFixed(2)) || 0,
+    summary,
+    favoriteMediaType,
+    genrePreferences,
+    actorPreferences,
+    directorPreferences,
+    storyPreferences,
+    excludedGenres,
+    useViewingSignals: true,
+  };
+
+  await TasteProfile.findOneAndUpdate({ userId }, { $set: profile }, { upsert: true, new: true });
+  return profile;
+}
+
+function scoreFromProfile(
+  profile: BuiltTasteProfile,
+  item: {
+    id?: number;
+    tmdbId?: number;
+    mediaType?: MediaType;
+    media_type?: MediaType;
+    title?: string;
+    genreIds?: number[];
+    genre_ids?: number[];
+    genres?: { id: number; name: string }[];
+    voteAverage?: number;
+    vote_average?: number;
+    popularity?: number;
+    overview?: string;
+    cast?: { id: number; name: string }[];
+    directors?: { id: number; name: string }[];
+    storyThemes?: { id: string; name: string }[];
+  },
+): MatchScoreResult {
+  if (profile.ratingCount < 3 || profile.confidence < 20) {
+    return {
+      score: null,
+      ...matchScoreMeta(null),
+      confidence: profile.confidence,
+      reasons: ["Bewerte mindestens 3 Titel, um personalisierte TasteMatch-Scores freizuschalten."],
+      insufficientData: true,
+    };
+  }
+
+  const genreIds = [
+    ...(item.genreIds ?? item.genre_ids ?? []),
+    ...((item.genres ?? []).map((genre) => genre.id) ?? []),
+  ];
+  const genrePrefs = new Map(profile.genrePreferences.map((pref) => [Number(pref.id), pref]));
+  const actorPrefs = new Map(profile.actorPreferences.map((pref) => [pref.id, pref]));
+  const directorPrefs = new Map(profile.directorPreferences.map((pref) => [pref.id, pref]));
+  const storyPrefs = new Map(profile.storyPreferences.map((pref) => [pref.id, pref]));
+
+  const matchedGenres = genreIds
+    .map((id) => genrePrefs.get(id))
+    .filter(Boolean) as TastePreference[];
+  const genreScore = matchedGenres.length
+    ? matchedGenres.reduce((sum, pref) => sum + pref.score, 0) / matchedGenres.length
+    : 50;
+  const excludedPenalty = genreIds.some((id) => profile.excludedGenres.includes(id)) ? 12 : 0;
+
+  const matchedActors = (item.cast ?? [])
+    .map((actor) => actorPrefs.get(String(actor.id)))
+    .filter(Boolean) as TastePreference[];
+  const actorScore = matchedActors.length
+    ? matchedActors.reduce((sum, pref) => sum + pref.score, 0) / matchedActors.length
+    : 50;
+
+  const matchedDirectors = (item.directors ?? [])
+    .map((director) => directorPrefs.get(String(director.id)))
+    .filter(Boolean) as TastePreference[];
+  const directorScore = matchedDirectors.length
+    ? matchedDirectors.reduce((sum, pref) => sum + pref.score, 0) / matchedDirectors.length
+    : 50;
+
+  const matchedStories = [
+    ...(item.storyThemes ?? []),
+    ...extractStoryThemes({ overview: item.overview ?? "" }),
+  ]
+    .map((theme) => storyPrefs.get(theme.id))
+    .filter(Boolean) as TastePreference[];
+  const storyScore = matchedStories.length
+    ? matchedStories.reduce((sum, pref) => sum + pref.score, 0) / matchedStories.length
+    : 50;
+
+  const qualityScore = clamp(Number(item.voteAverage ?? item.vote_average ?? 0) * 10, 35, 95);
+  const popularityScore = clamp(Math.log10(Number(item.popularity ?? 0) + 1) * 25, 30, 90);
+  const mediaType = item.mediaType ?? item.media_type;
+  const mediaTypeBonus = mediaType && mediaType === profile.favoriteMediaType ? 3 : 0;
+
+  const score = Math.round(
+    clamp(
+      genreScore * 0.42 +
+        storyScore * 0.18 +
+        actorScore * 0.12 +
+        directorScore * 0.1 +
+        qualityScore * 0.12 +
+        popularityScore * 0.06 +
+        mediaTypeBonus -
+        excludedPenalty,
+      0,
+      100,
+    ),
+  );
+  const meta = matchScoreMeta(score);
+  const reasons = [
+    ...matchedGenres
+      .filter((pref) => pref.score >= 60)
+      .slice(0, 2)
+      .map((pref) => `Du bewertest ${pref.name} überdurchschnittlich gut.`),
+    ...matchedStories
+      .filter((pref) => pref.score >= 60)
+      .slice(0, 1)
+      .map((pref) => `Das passt zu deinem StoryDNA-Thema ${pref.name}.`),
+    ...matchedActors
+      .filter((pref) => pref.score >= 65)
+      .slice(0, 1)
+      .map((pref) => `Du mochtest mehrere Titel mit ${pref.name}.`),
+    ...matchedDirectors
+      .filter((pref) => pref.score >= 65)
+      .slice(0, 1)
+      .map((pref) => `Der kreative Stil von ${pref.name} passt zu deinen Bewertungen.`),
+  ];
+  if (!reasons.length && qualityScore >= 75) {
+    reasons.push(
+      "Die globale Qualität ist stark, aber dein persönliches Profil liefert noch wenige direkte Signale.",
+    );
+  }
+
+  return {
+    score,
+    ...meta,
+    confidence: profile.confidence,
+    reasons: reasons.slice(0, 4),
+    insufficientData: false,
+  };
+}
+
+async function scoreMediaBatchForContext(items: any[], context: any) {
+  const user = context?.user ?? getAuthUserFromRequest(context?.request);
+  if (!user || !hasDb() || !items.length) return items;
+  const profile = await buildTasteProfile(user.id);
+  return items.map((item) => ({ ...item, matchScore: scoreFromProfile(profile, item) }));
+}
+
+async function scoreReleaseEventsForContext(items: any[], context: any) {
+  const user = context?.user ?? getAuthUserFromRequest(context?.request);
+  if (!user || !hasDb() || !items.length) return items;
+  const profile = await buildTasteProfile(user.id);
+  return items.map((item) => ({
+    ...item,
+    matchScore: scoreFromProfile(profile, {
+      id: item.tmdbId,
+      mediaType: item.mediaType,
+      title: item.title,
+      genreIds: item.genreIds,
+      voteAverage: item.voteAverage,
+      popularity: item.popularity,
+    }),
+  }));
+}
 
 const suggestionCache = new Map<
   string,
@@ -588,6 +1133,137 @@ function mapRating(doc: any) {
     rating: doc.rating,
     ratedAt: doc.updatedAt?.getTime?.() ?? doc.createdAt?.getTime?.() ?? Date.now(),
   };
+}
+
+function mapTasteProfile(profile: BuiltTasteProfile | any) {
+  return {
+    userId: profile.userId,
+    computedAt: new Date(profile.computedAt ?? Date.now()).getTime(),
+    ratingCount: profile.ratingCount ?? 0,
+    confidence: profile.confidence ?? 0,
+    averageRating: profile.averageRating ?? 0,
+    summary: profile.summary ?? "",
+    favoriteMediaType: profile.favoriteMediaType ?? null,
+    genrePreferences: profile.genrePreferences ?? [],
+    actorPreferences: profile.actorPreferences ?? [],
+    directorPreferences: profile.directorPreferences ?? [],
+    storyPreferences: profile.storyPreferences ?? [],
+    excludedGenres: profile.excludedGenres ?? [],
+    useViewingSignals: profile.useViewingSignals ?? true,
+  };
+}
+
+async function buildBingeStats(userId: string) {
+  assertDb();
+  const [ratings, progress, episodeCount] = await Promise.all([
+    Rating.find({ userId }).sort({ rating: -1, updatedAt: -1 }).lean(),
+    WatchProgress.find({ userId }).lean(),
+    EpisodeProgress.countDocuments({ userId }),
+  ]);
+  const titleRatings = ratings.filter((rating: any) => rating.seasonNumber == null);
+  const movieRatings = titleRatings.filter((rating: any) => rating.mediaType === "movie");
+  const seriesRatings = titleRatings.filter((rating: any) => rating.mediaType === "tv");
+  const watchedMovies = progress.filter(
+    (item: any) => item.mediaType === "movie" && item.status === "COMPLETED",
+  );
+  const watchedSeries = progress.filter((item: any) => item.mediaType === "tv");
+  const ratingDistributionMap = new Map<number, number>();
+  for (const rating of titleRatings) {
+    const bucket = Math.round(Number(rating.rating ?? 0) * 2) / 2;
+    ratingDistributionMap.set(bucket, (ratingDistributionMap.get(bucket) ?? 0) + 1);
+  }
+  const movieMinutes = watchedMovies.length * 105;
+  const seriesMinutes = episodeCount * 42;
+  const averageRating =
+    titleRatings.reduce((sum: number, item: any) => sum + Number(item.rating ?? 0), 0) /
+    Math.max(titleRatings.length, 1);
+
+  return {
+    userId,
+    moviesWatched: watchedMovies.length,
+    tvSeriesWatched: watchedSeries.length,
+    episodesWatched: episodeCount,
+    moviesRated: movieRatings.length,
+    seriesRated: seriesRatings.length,
+    averageRating: Number(averageRating.toFixed(2)) || 0,
+    estimatedMinutesWatched: movieMinutes + seriesMinutes,
+    ratingDistribution: [...ratingDistributionMap.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([rating, count]) => ({ rating, count })),
+    topRatedMovies: movieRatings.slice(0, 10).map(mapRating),
+    topRatedSeries: seriesRatings.slice(0, 10).map(mapRating),
+    completedSeries: watchedSeries.filter((item: any) => item.status === "COMPLETED").length,
+    watchingSeries: watchedSeries.filter((item: any) => item.status === "WATCHING").length,
+  };
+}
+
+async function personalizedRecommendationSections(
+  userId: string,
+  mediaType?: MediaType,
+  limit = 12,
+) {
+  const profile = await buildTasteProfile(userId);
+  if (profile.ratingCount < 3) {
+    return [
+      {
+        title: "Recommended For You",
+        subtitle:
+          "Bewerte mindestens 3 Titel, damit BingeVerse personalisierte Empfehlungen berechnen kann.",
+        items: [],
+      },
+    ];
+  }
+
+  const watched = await WatchProgress.find({ userId }).select("tmdbId mediaType status").lean();
+  const rated = await Rating.find({ userId, seasonNumber: null }).select("tmdbId mediaType").lean();
+  const blocked = new Set(
+    [...watched, ...rated].map((item: any) => `${item.mediaType}:${item.tmdbId}`),
+  );
+  const topGenres = profile.genrePreferences
+    .filter((genre) => genre.score >= 60)
+    .slice(0, 3)
+    .map((genre) => genre.id)
+    .filter((id) => /^\d+$/.test(id));
+  const targets: MediaType[] = mediaType ? [mediaType] : ["movie", "tv"];
+  const candidates: any[] = [];
+
+  for (const target of targets) {
+    const genre = topGenres[0];
+    const result = await tmdb<any>(`/discover/${target}`, {
+      sort_by: "popularity.desc",
+      with_genres: genre,
+      page: 1,
+      include_adult: false,
+    });
+    candidates.push(
+      ...(result.results ?? [])
+        .map((item: TmdbMedia) => normalizeMedia(item, target))
+        .filter((item: any) => item.posterPath && !blocked.has(`${item.mediaType}:${item.id}`)),
+    );
+  }
+
+  const scored = candidates
+    .map((item) => ({ ...item, matchScore: scoreFromProfile(profile, item) }))
+    .filter((item) => item.matchScore.score != null)
+    .sort((a, b) => (b.matchScore.score ?? 0) - (a.matchScore.score ?? 0))
+    .slice(0, Math.min(Math.max(limit, 1), 24));
+
+  const hiddenGems = scored
+    .filter((item) => Number(item.popularity ?? 0) < 100 && (item.matchScore.score ?? 0) >= 65)
+    .slice(0, Math.min(10, limit));
+
+  return [
+    {
+      title: "Recommended For You",
+      subtitle: "Nach deinem TasteDNA-Profil sortiert",
+      items: scored,
+    },
+    {
+      title: "Hidden Gems For You",
+      subtitle: "Weniger offensichtliche Titel mit gutem persönlichem Match",
+      items: hiddenGems,
+    },
+  ].filter((section) => section.items.length || section.title === "Recommended For You");
 }
 
 function parseAdminEmails() {
@@ -945,6 +1621,77 @@ const typeDefs = /* GraphQL */ `
     voteAverage: Float!
     voteCount: Int!
     genreIds: [Int!]!
+    matchScore: MatchScore
+  }
+
+  type MatchScore {
+    score: Int
+    label: String!
+    color: String!
+    confidence: Int!
+    reasons: [String!]!
+    insufficientData: Boolean!
+  }
+
+  type TastePreference {
+    id: String!
+    name: String!
+    score: Int!
+    observations: Int!
+    averageRating: Float!
+  }
+
+  type TasteDNAProfile {
+    userId: ID!
+    computedAt: Float!
+    ratingCount: Int!
+    confidence: Int!
+    averageRating: Float!
+    summary: String!
+    favoriteMediaType: MediaType
+    genrePreferences: [TastePreference!]!
+    actorPreferences: [TastePreference!]!
+    directorPreferences: [TastePreference!]!
+    storyPreferences: [TastePreference!]!
+    excludedGenres: [Int!]!
+    useViewingSignals: Boolean!
+  }
+
+  type RatingBucket {
+    rating: Float!
+    count: Int!
+  }
+
+  type BingeStats {
+    userId: ID!
+    moviesWatched: Int!
+    tvSeriesWatched: Int!
+    episodesWatched: Int!
+    moviesRated: Int!
+    seriesRated: Int!
+    averageRating: Float!
+    estimatedMinutesWatched: Int!
+    ratingDistribution: [RatingBucket!]!
+    topRatedMovies: [RatingEntry!]!
+    topRatedSeries: [RatingEntry!]!
+    completedSeries: Int!
+    watchingSeries: Int!
+  }
+
+  type BingeRecommendationSection {
+    title: String!
+    subtitle: String
+    items: [MediaItem!]!
+  }
+
+  input MatchScoreInput {
+    tmdbId: Int!
+    mediaType: MediaType!
+    title: String
+    overview: String
+    voteAverage: Float
+    popularity: Float
+    genreIds: [Int!]
   }
 
   type Genre {
@@ -1030,6 +1777,7 @@ const typeDefs = /* GraphQL */ `
     trailerKey: String
     myRating: Float
     inWatchlist: Boolean!
+    matchScore: MatchScore
   }
 
   type HomeData {
@@ -1132,6 +1880,7 @@ const typeDefs = /* GraphQL */ `
     createdAt: Float!
     updatedAt: Float!
     isWatchlisted: Boolean!
+    matchScore: MatchScore
   }
 
   type ReleaseEventConnection {
@@ -1332,6 +2081,15 @@ const typeDefs = /* GraphQL */ `
     watchProgress(userId: String!, tmdbId: Int!, mediaType: MediaType!): WatchProgress
     watchProgressList(userId: String!, mediaType: MediaType, status: WatchStatus): [WatchProgress!]!
     continueWatching(userId: String!): [WatchProgress!]!
+    tasteProfile(userId: String): TasteDNAProfile!
+    bingeStats(userId: String): BingeStats!
+    personalizedRecommendations(
+      userId: String
+      mediaType: MediaType
+      limit: Int
+    ): [BingeRecommendationSection!]!
+    matchScores(userId: String, items: [MatchScoreInput!]!): [MatchScore!]!
+    matchExplanation(userId: String, item: MatchScoreInput!): MatchScore!
     releaseEvents(filter: ReleaseEventFilterInput): ReleaseEventConnection!
     releaseEventsByTitle(tmdbId: Int!, mediaType: MediaType!, region: String): [ReleaseEvent!]!
     watchlistReleaseEvents(userId: String!, region: String): [ReleaseEvent!]!
@@ -1357,6 +2115,7 @@ const typeDefs = /* GraphQL */ `
     bulkCreateReleaseEvents(inputs: [ReleaseEventInput!]!): [ReleaseEvent!]!
     bulkUpdateReleaseEvents(ids: [ID!]!, input: ReleaseEventPatchInput!): [ReleaseEvent!]!
     bulkDeleteReleaseEvents(ids: [ID!]!): Boolean!
+    recomputeTasteProfile(userId: String): TasteDNAProfile!
   }
 `;
 
@@ -1379,7 +2138,7 @@ const resolvers = {
       if (!user) return null;
       return getUserProfile(user);
     },
-    home: async () => {
+    home: async (_root: unknown, _args: any, context: any) => {
       const [trendDay, trendMovie, trendTv, popMovie, popTv, topMovie, topTv] = await Promise.all([
         tmdb<any>("/trending/all/day"),
         tmdb<any>("/trending/movie/week"),
@@ -1411,7 +2170,7 @@ const resolvers = {
       const featured =
         trending.find((item: any) => item.backdropPath && item.overview) ?? trending[0] ?? null;
 
-      return {
+      const homeData = {
         featured,
         trending,
         trendingMovies: sortHomeItems(pick(trendMovie, "movie")),
@@ -1421,8 +2180,30 @@ const resolvers = {
         topMovies: sortHomeItems(pick(topMovie, "movie")),
         topTv: sortHomeItems(pick(topTv, "tv")),
       };
+
+      const scoredGroups = await Promise.all([
+        scoreMediaBatchForContext(homeData.featured ? [homeData.featured] : [], context),
+        scoreMediaBatchForContext(homeData.trending, context),
+        scoreMediaBatchForContext(homeData.trendingMovies, context),
+        scoreMediaBatchForContext(homeData.trendingTv, context),
+        scoreMediaBatchForContext(homeData.popularMovies, context),
+        scoreMediaBatchForContext(homeData.popularTv, context),
+        scoreMediaBatchForContext(homeData.topMovies, context),
+        scoreMediaBatchForContext(homeData.topTv, context),
+      ]);
+
+      return {
+        featured: scoredGroups[0][0] ?? null,
+        trending: scoredGroups[1],
+        trendingMovies: scoredGroups[2],
+        trendingTv: scoredGroups[3],
+        popularMovies: scoredGroups[4],
+        popularTv: scoredGroups[5],
+        topMovies: scoredGroups[6],
+        topTv: scoredGroups[7],
+      };
     },
-    discover: async (_: unknown, args: any) => {
+    discover: async (_: unknown, args: any, context: any) => {
       const params: Record<string, string | number | boolean | undefined> = {
         sort_by:
           args.media === "tv" && args.sort?.startsWith?.("primary_release_date")
@@ -1449,11 +2230,12 @@ const resolvers = {
       }
 
       const result = await tmdb<any>(`/discover/${args.media}`, params);
-      return (result.results ?? [])
+      const items = (result.results ?? [])
         .map((item: TmdbMedia) => normalizeMedia(item, args.media))
         .filter((item: any) => item.posterPath);
+      return scoreMediaBatchForContext(items, context);
     },
-    discoverPage: async (_: unknown, args: any) => {
+    discoverPage: async (_: unknown, args: any, context: any) => {
       const page = Math.max(1, Number(args.page ?? 1));
       const params: Record<string, string | number | boolean | undefined> = {
         sort_by:
@@ -1481,16 +2263,17 @@ const resolvers = {
       }
 
       const result = await tmdb<any>(`/discover/${args.media}`, params);
+      const items = (result.results ?? [])
+        .map((item: TmdbMedia) => normalizeMedia(item, args.media))
+        .filter((item: any) => item.posterPath);
       return {
-        results: (result.results ?? [])
-          .map((item: TmdbMedia) => normalizeMedia(item, args.media))
-          .filter((item: any) => item.posterPath),
+        results: await scoreMediaBatchForContext(items, context),
         page: result.page ?? page,
         totalPages: Math.min(Number(result.total_pages ?? page), 500),
         totalResults: Number(result.total_results ?? 0),
       };
     },
-    search: async (_: unknown, args: any) => {
+    search: async (_: unknown, args: any, context: any) => {
       if (!args.query.trim()) return [];
       const result = await tmdb<any>("/search/multi", {
         query: args.query,
@@ -1498,7 +2281,7 @@ const resolvers = {
         include_adult: false,
       });
 
-      return (result.results ?? [])
+      const items = (result.results ?? [])
         .filter(
           (item: TmdbMedia) =>
             (item.media_type === "movie" || item.media_type === "tv") &&
@@ -1506,8 +2289,9 @@ const resolvers = {
         )
         .map((item: TmdbMedia) => normalizeMedia(item))
         .filter((item: any) => item.posterPath);
+      return scoreMediaBatchForContext(items, context);
     },
-    searchPage: async (_: unknown, args: any) => {
+    searchPage: async (_: unknown, args: any, context: any) => {
       if (!args.query.trim()) {
         return { results: [], page: 1, totalPages: 1, totalResults: 0 };
       }
@@ -1523,9 +2307,12 @@ const resolvers = {
           (!args.language || item.original_language === args.language),
       );
       return {
-        results: filteredResults
-          .map((item: TmdbMedia) => normalizeMedia(item))
-          .filter((item: any) => item.posterPath),
+        results: await scoreMediaBatchForContext(
+          filteredResults
+            .map((item: TmdbMedia) => normalizeMedia(item))
+            .filter((item: any) => item.posterPath),
+          context,
+        ),
         page: result.page ?? page,
         totalPages: Math.min(Number(result.total_pages ?? page), 500),
         totalResults: Number(result.total_results ?? 0),
@@ -1584,6 +2371,36 @@ const resolvers = {
         myRating = rating?.rating ?? null;
         inWatchlist = Boolean(saved);
       }
+      const detailMatchScore =
+        effectiveUserId && hasDb()
+          ? scoreFromProfile(await buildTasteProfile(effectiveUserId), {
+              id: raw.id,
+              mediaType: args.media,
+              title: raw.title ?? raw.name ?? "Untitled",
+              overview: raw.overview ?? "",
+              genres: raw.genres ?? [],
+              voteAverage: raw.vote_average ?? 0,
+              popularity: raw.popularity ?? 0,
+              cast: (raw.credits?.cast ?? []).slice(0, 8).map((member: any) => ({
+                id: String(member.id),
+                name: member.name,
+              })),
+              directors:
+                args.media === "movie"
+                  ? (raw.credits?.crew ?? [])
+                      .filter((member: any) => member.job === "Director")
+                      .map((member: any) => ({ id: String(member.id), name: member.name }))
+                  : (raw.created_by ?? []).map((member: any) => ({
+                      id: String(member.id),
+                      name: member.name,
+                    })),
+              storyThemes: extractStoryThemes(raw),
+            })
+          : null;
+      const recommendationItems = (raw.recommendations?.results ?? [])
+        .map((item: TmdbMedia) => normalizeMedia(item, args.media))
+        .filter((item: any) => item.posterPath)
+        .slice(0, 20);
 
       return {
         id: raw.id,
@@ -1618,10 +2435,7 @@ const resolvers = {
           character: member.character,
           profilePath: member.profile_path ?? null,
         })),
-        recommendations: (raw.recommendations?.results ?? [])
-          .map((item: TmdbMedia) => normalizeMedia(item, args.media))
-          .filter((item: any) => item.posterPath)
-          .slice(0, 20),
+        recommendations: await scoreMediaBatchForContext(recommendationItems, context),
         watchProviders: region
           ? {
               link: region.link ?? null,
@@ -1634,6 +2448,7 @@ const resolvers = {
         trailerKey: trailer?.key ?? null,
         myRating,
         inWatchlist,
+        matchScore: detailMatchScore,
       };
     },
     recommendations: async (_: unknown, args: any) => {
@@ -1706,6 +2521,46 @@ const resolvers = {
       const progress = await Promise.all(docs.map((doc) => enrichWatchProgress(doc, true)));
       return progress.filter((item) => item.nextEpisode);
     },
+    tasteProfile: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId ?? null);
+      return mapTasteProfile(await buildTasteProfile(userId));
+    },
+    bingeStats: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId ?? null);
+      return buildBingeStats(userId);
+    },
+    personalizedRecommendations: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId ?? null);
+      return personalizedRecommendationSections(userId, args.mediaType, Number(args.limit ?? 12));
+    },
+    matchScores: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId ?? null);
+      const profile = await buildTasteProfile(userId);
+      return (args.items ?? []).map((item: any) =>
+        scoreFromProfile(profile, {
+          id: item.tmdbId,
+          mediaType: item.mediaType,
+          title: item.title ?? "",
+          overview: item.overview ?? "",
+          voteAverage: item.voteAverage ?? 0,
+          popularity: item.popularity ?? 0,
+          genreIds: item.genreIds ?? [],
+        }),
+      );
+    },
+    matchExplanation: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId ?? null);
+      const profile = await buildTasteProfile(userId);
+      return scoreFromProfile(profile, {
+        id: args.item.tmdbId,
+        mediaType: args.item.mediaType,
+        title: args.item.title ?? "",
+        overview: args.item.overview ?? "",
+        voteAverage: args.item.voteAverage ?? 0,
+        popularity: args.item.popularity ?? 0,
+        genreIds: args.item.genreIds ?? [],
+      });
+    },
     releaseEvents: async (_: unknown, args: any, context: any) => {
       if (!hasDb()) return { items: [], total: 0 };
       const filterArgs = args.filter ?? {};
@@ -1730,7 +2585,13 @@ const resolvers = {
         ReleaseEvent.find(filter).sort(sort).skip(offset).limit(limit),
         ReleaseEvent.countDocuments(filter),
       ]);
-      return { items: items.map((doc) => mapReleaseEvent(doc, watchlistMatches)), total };
+      return {
+        items: await scoreReleaseEventsForContext(
+          items.map((doc) => mapReleaseEvent(doc, watchlistMatches)),
+          context,
+        ),
+        total,
+      };
     },
     releaseEventsByTitle: async (_: unknown, args: any, context: any) => {
       if (!hasDb()) return [];
@@ -1753,7 +2614,10 @@ const resolvers = {
       const docs = await ReleaseEvent.find(filter)
         .sort({ releaseDate: 1, releaseYear: 1, releaseMonth: 1 })
         .limit(12);
-      return docs.map((doc) => mapReleaseEvent(doc, watchlistMatches));
+      return scoreReleaseEventsForContext(
+        docs.map((doc) => mapReleaseEvent(doc, watchlistMatches)),
+        context,
+      );
     },
     watchlistReleaseEvents: async (_: unknown, args: any, context: any) => {
       const userId = authorizeUser(context, args.userId);
@@ -1770,7 +2634,10 @@ const resolvers = {
         .sort({ releaseDate: 1, releaseYear: 1, releaseMonth: 1 })
         .limit(20);
       const matches = new Set(saved.map((item: any) => `${item.mediaType}-${item.tmdbId}`));
-      return docs.map((doc) => mapReleaseEvent(doc, matches));
+      return scoreReleaseEventsForContext(
+        docs.map((doc) => mapReleaseEvent(doc, matches)),
+        context,
+      );
     },
     adminReleaseEvents: async (_: unknown, args: any, context: any) => {
       await requireAdmin(context);
@@ -1877,6 +2744,10 @@ const resolvers = {
     logout: async (_root: unknown, _args: any, context: any) => {
       clearAuthCookie(context.response);
       return true;
+    },
+    recomputeTasteProfile: async (_: unknown, args: any, context: any) => {
+      const userId = authorizeUser(context, args.userId ?? null);
+      return mapTasteProfile(await buildTasteProfile(userId, true));
     },
     addWatchlist: async (_: unknown, args: any, context: any) => {
       assertDb();

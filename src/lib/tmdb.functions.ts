@@ -14,6 +14,16 @@ export interface MediaItem {
   vote_average: number;
   vote_count: number;
   genre_ids: number[];
+  match_score?: MatchScore | null;
+}
+
+export interface MatchScore {
+  score: number | null;
+  label: string;
+  color: string;
+  confidence: number;
+  reasons: string[];
+  insufficientData: boolean;
 }
 
 export interface SeasonInfo {
@@ -70,6 +80,7 @@ export interface MediaDetails extends MediaItem {
   trailerKey: string | null;
   myRating: number | null;
   inWatchlist: boolean;
+  match_score?: MatchScore | null;
 }
 
 type Provider = {
@@ -90,6 +101,14 @@ const MEDIA_FIELDS = `
   voteAverage
   voteCount
   genreIds
+  matchScore {
+    score
+    label
+    color
+    confidence
+    reasons
+    insufficientData
+  }
 `;
 
 function fromMedia(raw: any): MediaItem {
@@ -105,6 +124,7 @@ function fromMedia(raw: any): MediaItem {
     vote_average: raw.voteAverage,
     vote_count: raw.voteCount,
     genre_ids: raw.genreIds,
+    match_score: raw.matchScore ?? null,
   };
 }
 
@@ -156,6 +176,7 @@ function fromDetails(raw: any): MediaDetails {
     trailerKey: raw.trailerKey,
     myRating: raw.myRating,
     inWatchlist: raw.inWatchlist,
+    match_score: raw.matchScore ?? null,
   };
 }
 
@@ -528,6 +549,14 @@ export async function getDetails({
           trailerKey
           myRating
           inWatchlist
+          matchScore {
+            score
+            label
+            color
+            confidence
+            reasons
+            insufficientData
+          }
         }
       }
     `,
