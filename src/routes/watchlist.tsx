@@ -65,21 +65,27 @@ export function WatchlistPage() {
           <p className="text-sm text-muted-foreground mt-1">{items.length} Einträge</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <div className="inline-flex p-1 rounded-full bg-surface border border-border">
+          <div
+            role="group"
+            aria-label="Medientyp"
+            className="inline-flex p-1 rounded-md bg-surface border border-input"
+          >
             {(["all", "movie", "tv"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setFilter(t)}
-                className={`px-4 h-9 rounded-full text-sm font-semibold transition ${filter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                aria-pressed={filter === t}
+                className={`px-4 h-9 rounded-sm text-sm font-semibold transition ${filter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
               >
                 {t === "all" ? "Alle" : t === "movie" ? "Filme" : "Serien"}
               </button>
             ))}
           </div>
           <select
+            aria-label="Watchlist sortieren"
             value={sort}
             onChange={(e) => setSort(e.target.value as "added" | "title" | "rating")}
-            className="h-10 px-4 rounded-full bg-surface border border-border text-sm"
+            className="h-11 px-3 rounded-md bg-surface border border-input text-sm"
           >
             <option value="added">Zuletzt hinzugefügt</option>
             <option value="title">Titel A-Z</option>

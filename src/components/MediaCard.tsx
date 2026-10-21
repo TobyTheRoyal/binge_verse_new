@@ -18,8 +18,8 @@ export function MediaCard({ item, priority }: { item: MediaItem; priority?: bool
   const poster = posterUrl(item.poster_path, "w342");
 
   return (
-    <Link href={`/title/${item.media_type}/${item.id}`} className="group block card-hover">
-      <div className="relative aspect-[2/3] rounded-xl overflow-hidden bg-surface border border-border">
+    <Link href={`/title/${item.media_type}/${item.id}`} className="group block min-w-0 card-hover">
+      <div className="media-poster relative aspect-[2/3] rounded-lg overflow-hidden bg-surface border border-border">
         {poster ? (
           <img
             src={poster}
@@ -34,12 +34,12 @@ export function MediaCard({ item, priority }: { item: MediaItem; priority?: bool
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
         {item.vote_average > 0 && (
-          <div className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur text-xs font-semibold">
+          <div className="absolute top-2 right-2 inline-flex items-center gap-1 rounded-sm border border-white/10 bg-black/80 px-1.5 py-1 text-[11px] font-bold text-foreground backdrop-blur">
             <Star className="size-3 text-[var(--color-gold)] fill-[var(--color-gold)]" />
             {item.vote_average.toFixed(1)}
           </div>
         )}
-        <div className="absolute top-2 left-2 inline-flex items-center px-2 py-0.5 rounded-full bg-black/60 backdrop-blur text-[10px] font-bold uppercase tracking-wider">
+        <div className="absolute top-2 left-2 inline-flex items-center rounded-sm border border-white/10 bg-black/80 px-1.5 py-1 text-[10px] font-bold text-foreground backdrop-blur">
           {item.media_type === "tv" ? "Serie" : "Film"}
         </div>
         {item.match_score && (
@@ -49,7 +49,7 @@ export function MediaCard({ item, priority }: { item: MediaItem; priority?: bool
         )}
       </div>
       <div className="mt-2.5 px-0.5">
-        <h3 className="text-sm font-semibold line-clamp-1 group-hover:text-primary transition-colors">
+        <h3 className="text-sm font-medium line-clamp-1 group-hover:text-primary transition-colors">
           {item.title}
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">{year ?? "—"}</p>

@@ -141,9 +141,7 @@ function SeasonRatingCard({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-            Staffel {seasonNumber}
-          </div>
+          <div className="text-[10px] uppercase text-muted-foreground">Staffel {seasonNumber}</div>
           <div className="truncate text-sm font-semibold">{seasonName}</div>
         </div>
         {currentRating > 0 && (
@@ -292,11 +290,11 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
             {/* Header */}
             <div className="space-y-5 md:pt-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.2em] text-primary font-bold mb-2">
+                <div className="text-xs uppercase text-primary font-bold mb-2">
                   {d.media_type === "tv" ? "Serie" : "Film"}
                 </div>
                 <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight leading-[1.05]">
-                  <span className="gradient-text">{d.title}</span>
+                  {d.title}
                 </h1>
                 {d.tagline && <p className="text-muted-foreground italic mt-2">"{d.tagline}"</p>}
               </div>
@@ -564,9 +562,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
             <section className="mt-12 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-2xl font-extrabold tracking-tight">Staffel-Bewertungen</h2>
-                <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                  pro Staffel
-                </span>
+                <span className="text-[10px] uppercase text-muted-foreground">pro Staffel</span>
               </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {seasonCards.map((season) => (

@@ -114,7 +114,7 @@ function ReleaseCard({
             </button>
           )}
         </div>
-        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold uppercase tracking-[0.12em]">
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold uppercase">
           <span className="rounded-full bg-primary/15 px-2 py-1 text-primary">{item.provider}</span>
           <span className="rounded-full bg-background px-2 py-1 text-muted-foreground">
             {item.region}
@@ -269,15 +269,20 @@ export function CalendarPage() {
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight md:text-4xl">BingeCalendar</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Streamingstarts nach Anbieter, Region und Watchlist-Relevanz.
+            Kino und Streaming in Österreich. Alle Starts auf einen Blick.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div
+          role="group"
+          aria-label="Kalenderansicht"
+          className="flex max-w-full flex-wrap gap-1 rounded-md border border-input bg-surface p-1"
+        >
           {(["month", "week", "list", "soon"] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => setView(mode)}
-              className={`h-10 rounded-full px-4 text-sm font-semibold ${
+              aria-pressed={view === mode}
+              className={`h-9 rounded-sm px-3 text-sm font-semibold transition-colors ${
                 view === mode
                   ? "bg-primary text-primary-foreground"
                   : "bg-surface text-muted-foreground"
@@ -306,9 +311,10 @@ export function CalendarPage() {
 
       <div className="mt-6 flex flex-wrap gap-2">
         <select
+          aria-label="Region"
           value={region}
           onChange={(event) => setRegion(event.target.value)}
-          className="h-10 rounded-full border border-border bg-surface px-4 text-sm"
+          className="h-10 rounded-md border border-input bg-surface px-3 text-sm"
         >
           {REGIONS.map((item) => (
             <option key={item} value={item}>
@@ -317,9 +323,10 @@ export function CalendarPage() {
           ))}
         </select>
         <select
+          aria-label="Medientyp"
           value={mediaType}
           onChange={(event) => setMediaType(event.target.value as "all" | "movie" | "tv")}
-          className="h-10 rounded-full border border-border bg-surface px-4 text-sm"
+          className="h-10 rounded-md border border-input bg-surface px-3 text-sm"
         >
           <option value="all">Alles</option>
           <option value="movie">Filme</option>
@@ -329,7 +336,8 @@ export function CalendarPage() {
           <button
             key={provider}
             onClick={() => toggleProvider(provider)}
-            className={`h-10 rounded-full border px-4 text-sm font-semibold ${
+            aria-pressed={providers.includes(provider)}
+            className={`h-10 rounded-md border px-3 text-sm font-semibold transition-colors ${
               providers.includes(provider)
                 ? "border-primary bg-primary text-primary-foreground"
                 : "border-border bg-surface"
@@ -342,12 +350,14 @@ export function CalendarPage() {
 
       <div className="mt-6 flex items-center justify-between">
         <button
+          aria-label="Vorheriger Monat"
+          title="Vorheriger Monat"
           onClick={() => {
             const next = new Date(Date.UTC(year, month - 1, 1));
             setYear(next.getUTCFullYear());
             setMonth(next.getUTCMonth());
           }}
-          className="grid size-10 place-items-center rounded-full bg-surface"
+          className="icon-button bg-surface"
         >
           <ChevronLeft className="size-4" />
         </button>
@@ -358,12 +368,14 @@ export function CalendarPage() {
           })}
         </h2>
         <button
+          aria-label="Nächster Monat"
+          title="Nächster Monat"
           onClick={() => {
             const next = new Date(Date.UTC(year, month + 1, 1));
             setYear(next.getUTCFullYear());
             setMonth(next.getUTCMonth());
           }}
-          className="grid size-10 place-items-center rounded-full bg-surface"
+          className="icon-button bg-surface"
         >
           <ChevronRight className="size-4" />
         </button>

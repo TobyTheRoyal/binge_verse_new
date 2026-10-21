@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Clapperboard, Loader2, Search, SlidersHorizontal, Tv } from "lucide-react";
 import { MediaCard, posterUrl } from "@/components/MediaCard";
 import {
   discoverPage,
@@ -45,7 +45,7 @@ const STREAMING_PROVIDERS_AT = [
   { v: "1899", l: "HBO Max" },
   { v: "2750", l: "RTL+" },
   { v: "531", l: "Paramount+" },
-  { v: "9", l: "Amazon Prime Video" },
+  { v: "9", l: "Prime Video" },
 ];
 
 export function BrowsePage() {
@@ -185,17 +185,28 @@ export function BrowsePage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-8">
-      <div className="space-y-4">
-        <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">{heading}</h1>
+      <div className="space-y-6 border-b border-border pb-6">
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-2 text-xs font-semibold text-primary">
+            <SlidersHorizontal className="size-3.5" />
+            Dein nächster Filmabend
+          </div>
+          <h1 className="text-3xl font-semibold md:text-4xl">{heading}</h1>
+        </div>
 
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-2">
             <div className="relative flex-1 min-w-[200px]">
+              <Search
+                aria-hidden="true"
+                className="absolute left-3.5 top-3.5 size-4 text-muted-foreground"
+              />
               <input
+                aria-label="Titel suchen"
                 value={text}
                 onChange={(event) => setText(event.target.value)}
-                placeholder="Suche..."
-                className="w-full h-11 px-4 rounded-full bg-surface border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring text-sm"
+                placeholder="Nach Titel suchen"
+                className="w-full h-11 pl-10 pr-4 rounded-md bg-surface border border-input focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring text-sm"
               />
               {suggestions.length > 0 && (
                 <div className="absolute left-0 right-0 top-full mt-2 overflow-hidden rounded-2xl border border-border bg-background/95 shadow-2xl backdrop-blur-sm z-20">
@@ -234,7 +245,7 @@ export function BrowsePage() {
                           <div className="truncate font-semibold text-foreground">{item.title}</div>
                           <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                             <span>{year}</span>
-                            <span className="rounded-full bg-surface px-1.5 py-0.5 uppercase tracking-[0.16em] text-[9px] text-muted-foreground">
+                            <span className="rounded-sm bg-surface-2 px-1.5 py-0.5 text-[10px] text-muted-foreground">
                               {item.media_type === "tv" ? "Serie" : "Film"}
                             </span>
                           </div>
@@ -247,8 +258,9 @@ export function BrowsePage() {
             </div>
             <button
               type="submit"
-              className="h-11 px-6 rounded-full bg-primary text-primary-foreground font-semibold hover:opacity-90 transition"
+              className="inline-flex h-11 items-center gap-2 rounded-md bg-primary px-6 font-bold text-primary-foreground transition hover:bg-primary/90"
             >
+              <Search className="size-4" />
               Suchen
             </button>
             {isSearch && (
@@ -258,7 +270,7 @@ export function BrowsePage() {
                   setText("");
                   update({ q: undefined });
                 }}
-                className="h-11 px-4 rounded-full bg-surface border border-border text-sm font-medium hover:bg-surface-2"
+                className="h-11 px-4 rounded-md bg-surface border border-border text-sm font-medium hover:bg-surface-2"
               >
                 Filter zeigen
               </button>
@@ -266,28 +278,37 @@ export function BrowsePage() {
           </div>
 
           {!isSearch && (
-            <div className="flex flex-wrap gap-2">
-              <div className="inline-flex p-1 rounded-full bg-surface border border-border">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+              <div
+                role="group"
+                aria-label="Medientyp"
+                className="col-span-2 inline-flex shrink-0 rounded-md border border-input bg-surface p-1"
+              >
                 <button
                   type="button"
                   onClick={() => update({ type: "movie", genre: undefined })}
-                  className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "movie" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  aria-pressed={type === "movie"}
+                  className={`inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-sm px-4 text-sm font-semibold transition ${type === "movie" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
+                  <Clapperboard className="size-4" />
                   Filme
                 </button>
                 <button
                   type="button"
                   onClick={() => update({ type: "tv", genre: undefined })}
-                  className={`px-4 h-9 rounded-full text-sm font-semibold transition ${type === "tv" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  aria-pressed={type === "tv"}
+                  className={`inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-sm px-4 text-sm font-semibold transition ${type === "tv" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
+                  <Tv className="size-4" />
                   Serien
                 </button>
               </div>
 
               <select
+                aria-label="Genre"
                 value={genre ?? ""}
                 onChange={(event) => update({ genre: event.target.value || undefined })}
-                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+                className="h-11 min-w-0 rounded-md border border-input bg-surface px-3 text-sm sm:max-w-48"
               >
                 <option value="">Alle Genres</option>
                 {genreOptions.map((g) => (
@@ -298,9 +319,10 @@ export function BrowsePage() {
               </select>
 
               <select
+                aria-label="Erscheinungsjahr"
                 value={year ?? ""}
                 onChange={(event) => update({ year: event.target.value || undefined })}
-                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+                className="h-11 min-w-0 rounded-md border border-input bg-surface px-3 text-sm"
               >
                 <option value="">Alle Jahre</option>
                 {YEARS.map((y) => (
@@ -311,9 +333,10 @@ export function BrowsePage() {
               </select>
 
               <select
+                aria-label="Originalsprache"
                 value={language ?? ""}
                 onChange={(event) => update({ language: event.target.value || undefined })}
-                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+                className="h-11 min-w-0 rounded-md border border-input bg-surface px-3 text-sm"
               >
                 <option value="">Alle Sprachen</option>
                 {LANGUAGES.map((language) => (
@@ -324,11 +347,12 @@ export function BrowsePage() {
               </select>
 
               <select
+                aria-label="Streamingdienst in Österreich"
                 value={provider ?? ""}
                 onChange={(event) => update({ provider: event.target.value || undefined })}
-                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+                className="h-11 min-w-0 rounded-md border border-input bg-surface px-3 text-sm sm:max-w-56"
               >
-                <option value="">Alle Streamingdienste AT</option>
+                <option value="">Alle Anbieter</option>
                 {STREAMING_PROVIDERS_AT.map((provider) => (
                   <option key={provider.v} value={provider.v}>
                     {provider.l}
@@ -337,9 +361,10 @@ export function BrowsePage() {
               </select>
 
               <select
+                aria-label="Sortierung"
                 value={sort ?? "popularity.desc"}
                 onChange={(event) => update({ sort: event.target.value })}
-                className="h-11 px-4 rounded-full bg-surface border border-border text-sm cursor-pointer"
+                className="col-span-2 h-11 min-w-0 rounded-md border border-input bg-surface px-3 text-sm"
               >
                 {SORTS.map((s) => (
                   <option key={s.v} value={s.v}>

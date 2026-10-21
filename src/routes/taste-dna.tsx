@@ -22,7 +22,7 @@ function PreferenceBars({ title, items }: { title: string; items: TastePreferenc
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-background">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-primary to-accent"
+                  className="h-full rounded-full bg-primary"
                   style={{ width: `${item.score}%` }}
                 />
               </div>
@@ -87,12 +87,10 @@ export function TasteDnaPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-8">
-      <section className="rounded-3xl border border-border bg-surface p-6 md:p-8">
+      <section className="border-b border-border pb-8">
         <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
           <div>
-            <div className="text-xs font-bold uppercase tracking-[0.22em] text-primary">
-              TasteDNA
-            </div>
+            <div className="text-xs font-bold text-primary">TasteDNA</div>
             <h1 className="mt-2 text-4xl font-extrabold tracking-tight">Dein Filmgeschmack</h1>
             <p className="mt-3 max-w-3xl text-muted-foreground">{profile.summary}</p>
           </div>
@@ -129,7 +127,7 @@ export function TasteDnaPage() {
         <PreferenceBars title="Regie & Creator" items={profile.directorPreferences} />
       </div>
 
-      <section className="rounded-2xl border border-border bg-surface p-5">
+      <section className="border-y border-border py-6">
         <h2 className="text-lg font-extrabold">BingeStats</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[

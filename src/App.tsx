@@ -1,4 +1,5 @@
 import { Navbar } from "./components/Navbar";
+import { BrandLogo } from "./components/BrandLogo";
 import { useNavigation, Link } from "./lib/navigation";
 import { AuthPage } from "./routes/auth";
 import { AdminPage } from "./routes/admin";
@@ -28,10 +29,42 @@ export function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-3 focus:font-bold focus:text-primary-foreground"
+      >
+        Zum Inhalt springen
+      </a>
       <Navbar />
-      <main className="flex-1">{page}</main>
-      <footer className="border-t border-border mt-16 py-8 text-center text-xs text-muted-foreground">
-        Powered by TMDB, OMDb, Node.js, GraphQL and MongoDB.
+      <main id="main-content" className="flex-1">
+        {page}
+      </main>
+      <footer className="mt-12 border-t border-border bg-surface/30">
+        <div className="mx-auto flex max-w-7xl flex-col gap-8 px-4 py-10 sm:px-6 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-3">
+            <Link href="/" aria-label="BINGE Startseite" className="inline-block">
+              <BrandLogo className="!w-24" />
+            </Link>
+            <p className="text-xs text-muted-foreground">
+              Dein nächster Lieblingsfilm wartet schon.
+            </p>
+          </div>
+          <nav
+            aria-label="Footer-Navigation"
+            className="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-muted-foreground"
+          >
+            <Link href="/browse?type=movie" className="hover:text-primary">
+              Filme
+            </Link>
+            <Link href="/browse?type=tv" className="hover:text-primary">
+              Serien
+            </Link>
+            <Link href="/calendar" className="hover:text-primary">
+              Kalender
+            </Link>
+            <span className="text-xs text-muted-foreground/70">Filmdaten von TMDB & OMDb</span>
+          </nav>
+        </div>
       </footer>
     </div>
   );
