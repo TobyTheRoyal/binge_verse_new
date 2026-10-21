@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { AuthProvider } from "./lib/auth-context";
+import { AuthProvider } from "./lib/auth-provider";
 import { NavigationProvider } from "./lib/navigation";
 import { App } from "./App";
 import "./styles.css";

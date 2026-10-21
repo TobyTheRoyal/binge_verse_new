@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { WATCH_REGION } from "../../shared/catalog";
 import { useState } from "react";
 import {
   Bookmark,
@@ -13,7 +14,8 @@ import {
   Circle,
   RotateCcw,
 } from "lucide-react";
-import { TMDB_IMG, posterUrl, MediaCard } from "@/components/MediaCard";
+import { MediaCard } from "@/components/MediaCard";
+import { TMDB_IMG, posterUrl } from "@/lib/media-assets";
 import { MatchScore } from "@/components/MatchScore";
 import { useAuth } from "@/lib/auth-context";
 import { getDetails, getSeasonDetails, type EpisodeInfo } from "@/lib/tmdb.functions";
@@ -194,7 +196,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
   });
   const releaseQ = useQuery({
     queryKey: ["release-events-title", media, id],
-    queryFn: () => getReleaseEventsByTitle({ tmdbId: id, mediaType: media, region: "AT" }),
+    queryFn: () => getReleaseEventsByTitle({ tmdbId: id, mediaType: media, region: WATCH_REGION }),
     staleTime: 1000 * 60 * 10,
   });
 

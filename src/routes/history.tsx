@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { History as HistoryIcon, Star, Trash2 } from "lucide-react";
-import { posterUrl } from "@/components/MediaCard";
+import { posterUrl } from "@/lib/media-assets";
 import { useAuth } from "@/lib/auth-context";
 import {
   useRatings,

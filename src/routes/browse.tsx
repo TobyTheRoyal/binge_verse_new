@@ -1,14 +1,11 @@
+import { useMediaSuggestions } from "@/hooks/use-media-suggestions";
+import { STREAMING_PROVIDERS } from "../../shared/catalog";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Clapperboard, Loader2, Search, SlidersHorizontal, Tv } from "lucide-react";
-import { MediaCard, posterUrl } from "@/components/MediaCard";
-import {
-  discoverPage,
-  getGenres,
-  searchMultiPage,
-  searchSuggestions,
-  MediaItem,
-} from "@/lib/tmdb.functions";
+import { MediaCard } from "@/components/MediaCard";
+import { posterUrl } from "@/lib/media-assets";
+import { discoverPage, getGenres, searchMultiPage, type MediaItem } from "@/lib/tmdb.functions";
 import { useNavigate, useSearchParams } from "@/lib/navigation";
 
 const YEARS = Array.from({ length: 50 }, (_, i) => String(new Date().getFullYear() - i));
@@ -37,16 +34,10 @@ const LANGUAGES = [
   { v: "nl", l: "Niederländisch" },
 ];
 const TV_ROMANCE_GENRE = { id: "keyword:9840", name: "Romantik" };
-const STREAMING_PROVIDERS_AT = [
-  { v: "8", l: "Netflix" },
-  { v: "337", l: "Disney+" },
-  { v: "350", l: "Apple TV+" },
-  { v: "29|30", l: "Sky / WOW" },
-  { v: "1899", l: "HBO Max" },
-  { v: "2750", l: "RTL+" },
-  { v: "531", l: "Paramount+" },
-  { v: "9", l: "Prime Video" },
-];
+const STREAMING_PROVIDERS_AT = STREAMING_PROVIDERS.map((provider) => ({
+  v: provider.id,
+  l: "browseName" in provider ? provider.browseName : provider.name,
+}));
 
 export function BrowsePage() {
   const navigate = useNavigate();
@@ -59,33 +50,10 @@ export function BrowsePage() {
   const language = searchParams.get("language") ?? undefined;
   const provider = searchParams.get("provider") ?? undefined;
   const [text, setText] = useState(q);
-  const [suggestions, setSuggestions] = useState<MediaItem[]>([]);
+  const suggestions = useMediaSuggestions(text);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => setText(q), [q]);
-
-  useEffect(() => {
-    const query = text.trim();
-    if (query.length < 2) {
-      setSuggestions([]);
-      return;
-    }
-
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      try {
-        const result = await searchSuggestions({ data: { query, limit: 6 } });
-        if (!cancelled) setSuggestions(result.results);
-      } catch {
-        if (!cancelled) setSuggestions([]);
-      }
-    }, 150);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [text]);
 
   const genresQ = useQuery({
     queryKey: ["genres", type],
@@ -222,7 +190,6 @@ export function BrowsePage() {
                         type="button"
                         onClick={() => {
                           setText(item.title);
-                          setSuggestions([]);
                           navigate(`/title/${item.media_type}/${item.id}`);
                         }}
                         className="flex w-full items-center gap-3 px-2 py-2 text-left text-sm hover:bg-surface border-b border-border last:border-b-0"

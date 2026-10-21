@@ -1,8 +1,6 @@
 import { GraphQLClient } from "graphql-request";
 
-const graphqlUrl = typeof window === "undefined"
-  ? "/graphql"
-  : `${window.location.origin}/graphql`;
+const graphqlUrl = typeof window === "undefined" ? "/graphql" : `${window.location.origin}/graphql`;
 
 export const graphqlClient = new GraphQLClient(graphqlUrl, {
   fetch: (url, options) =>

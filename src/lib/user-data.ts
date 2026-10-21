@@ -3,8 +3,12 @@ import { useMemo } from "react";
 import { useAuth } from "./auth-context";
 import { graphqlClient } from "./graphql";
 import type { EpisodeInfo } from "./tmdb.functions";
+import { invalidateViewingData } from "./query-invalidation";
+import type { MediaType } from "../../shared/catalog";
+export type { WatchStatus } from "../../shared/catalog";
+import type { WatchStatus } from "../../shared/catalog";
 
-export type Media = "movie" | "tv";
+export type Media = MediaType;
 
 export interface SavedItem {
   id: number;
@@ -21,8 +25,6 @@ export interface RatingEntry extends SavedItem {
   rating: number;
   ratedAt: number;
 }
-
-export type WatchStatus = "PLAN_TO_WATCH" | "WATCHING" | "COMPLETED" | "ON_HOLD" | "DROPPED";
 
 export interface WatchProgress extends SavedItem {
   status: WatchStatus;
@@ -198,6 +200,17 @@ function toProgressInput(
   };
 }
 
+async function saveWatchStatus(
+  userId: string,
+  item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
+) {
+  const data = await graphqlClient.request<{ setWatchStatus: WatchProgressResponse }>(
+    `mutation SetWatchStatus($input: WatchProgressInput!) { setWatchStatus(input: $input) { ${progressFields} } }`,
+    { input: toProgressInput(userId, item) },
+  );
+  return fromProgress(data.setWatchStatus);
+}
+
 export function useWatchlist() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -340,14 +353,7 @@ export function useRatings() {
     onError: (_error, _item, context) => {
       if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey });
-      queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["season-details"] });
-    },
+    onSettled: () => invalidateViewingData(queryClient),
   });
 
   const removeMutation = useMutation({
@@ -387,14 +393,7 @@ export function useRatings() {
     onError: (_error, _item, context) => {
       if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey });
-      queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["season-details"] });
-    },
+    onSettled: () => invalidateViewingData(queryClient),
   });
 
   const items = useMemo(() => query.data ?? [], [query.data]);
@@ -441,28 +440,12 @@ export function useWatchProgress(id?: number, media_type?: Media) {
     },
   });
 
-  const invalidateProgress = () => {
-    queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
-    queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
-    queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
-    queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
-    queryClient.invalidateQueries({ queryKey: ["season-details"] });
-  };
+  const invalidateProgress = () => invalidateViewingData(queryClient);
 
   const setStatusMutation = useMutation({
-    mutationFn: async (
+    mutationFn: (
       item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
-    ) => {
-      const data = await graphqlClient.request<{ setWatchStatus: WatchProgressResponse }>(
-        `
-          mutation SetWatchStatus($input: WatchProgressInput!) {
-            setWatchStatus(input: $input) { ${progressFields} }
-          }
-        `,
-        { input: toProgressInput(user!.id, item) },
-      );
-      return fromProgress(data.setWatchStatus);
-    },
+    ) => saveWatchStatus(user!.id, item),
     onSuccess: invalidateProgress,
   });
 
@@ -602,27 +585,12 @@ export function useWatchProgressActions() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const invalidateProgress = () => {
-    queryClient.invalidateQueries({ queryKey: ["watch-progress", user?.id] });
-    queryClient.invalidateQueries({ queryKey: ["watch-progress-list", user?.id] });
-    queryClient.invalidateQueries({ queryKey: ["continue-watching", user?.id] });
-    queryClient.invalidateQueries({ queryKey: ["watchlist", user?.id] });
-  };
+  const invalidateProgress = () => invalidateViewingData(queryClient);
 
   const setStatusMutation = useMutation({
-    mutationFn: async (
+    mutationFn: (
       item: Omit<SavedItem, "addedAt"> & { status: WatchStatus; totalEpisodes?: number },
-    ) => {
-      const data = await graphqlClient.request<{ setWatchStatus: WatchProgressResponse }>(
-        `
-          mutation SetWatchStatus($input: WatchProgressInput!) {
-            setWatchStatus(input: $input) { ${progressFields} }
-          }
-        `,
-        { input: toProgressInput(user!.id, item) },
-      );
-      return fromProgress(data.setWatchStatus);
-    },
+    ) => saveWatchStatus(user!.id, item),
     onSuccess: invalidateProgress,
   });
 

@@ -1,12 +1,7 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: "USER" | "EDITOR" | "ADMIN";
-  isAdmin: boolean;
-}
+import { useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { registrationSchema, PASSWORD_MIN_LENGTH } from "../../shared/auth";
+import { Ctx, type AuthCtx, type User } from "./auth-context";
 
 type UserResponse = {
   id: string;
@@ -15,16 +10,6 @@ type UserResponse = {
   role?: User["role"];
   isAdmin?: boolean;
 };
-
-interface AuthCtx {
-  user: User | null;
-  loading: boolean;
-  signUp: (name: string, email: string, password: string) => Promise<{ error?: string }>;
-  signIn: (email: string, password: string) => Promise<{ error?: string }>;
-  signOut: () => Promise<void>;
-}
-
-const Ctx = createContext<AuthCtx | null>(null);
 
 function normalizeUser(raw: UserResponse | null | undefined): User | null {
   if (!raw) return null;
@@ -38,6 +23,7 @@ function normalizeUser(raw: UserResponse | null | undefined): User | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -73,8 +59,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const trimmedName = name.trim();
     const trimmedEmail = email.trim().toLowerCase();
 
-    if (!trimmedName || !trimmedEmail || password.length < 6) {
-      return { error: "Bitte alle Felder ausfüllen (Passwort min. 6 Zeichen)." };
+    if (
+      !registrationSchema.safeParse({ name: trimmedName, email: trimmedEmail, password }).success
+    ) {
+      return {
+        error: `Bitte gültige Kontodaten und ein Passwort mit mindestens ${PASSWORD_MIN_LENGTH} Zeichen (maximal 72 UTF-8-Bytes) eingeben.`,
+      };
     }
 
     try {
@@ -90,6 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: data.error ?? "Registrierung fehlgeschlagen." };
       }
 
+      await queryClient.cancelQueries();
+      queryClient.clear();
       setUser(normalizeUser(data.user));
       return {};
     } catch {
@@ -113,6 +105,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: data.error ?? "Login fehlgeschlagen." };
       }
 
+      await queryClient.cancelQueries();
+      queryClient.clear();
       setUser(normalizeUser(data.user));
       return {};
     } catch {
@@ -121,22 +115,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    try {
-      await fetch("/api/logout", {
-        method: "POST",
-        credentials: "include",
-      });
-    } catch {
-      // ignore and still clear local UI state
-    }
+    const response = await fetch("/api/logout", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) throw new Error("Abmelden fehlgeschlagen. Bitte versuche es erneut.");
+    await queryClient.cancelQueries();
+    queryClient.clear();
     setUser(null);
   };
 
   return <Ctx.Provider value={{ user, loading, signUp, signIn, signOut }}>{children}</Ctx.Provider>;
-}
-
-export function useAuth() {
-  const v = useContext(Ctx);
-  if (!v) throw new Error("useAuth must be used within AuthProvider");
-  return v;
 }

@@ -41,7 +41,7 @@ const homeData = {
       voteAverage: 7.3,
       voteCount: 5,
       genreIds: [10749, 35],
-    }
+    },
   ],
   trendingMovies: [],
   trendingTv: [],
@@ -62,11 +62,11 @@ try {
     topMovies: homeData.topMovies.map(fromMedia),
     topTv: homeData.topTv.map(fromMedia),
   };
-  
-  console.log('Transformation successful');
-  console.log('Featured:', result.featured.title);
-  console.log('Trending count:', result.trending.length);
+
+  console.log("Transformation successful");
+  console.log("Featured:", result.featured.title);
+  console.log("Trending count:", result.trending.length);
 } catch (error) {
-  console.log('Transformation error:', error.message);
-  console.log('Stack:', error.stack);
+  console.log("Transformation error:", error.message);
+  console.log("Stack:", error.stack);
 }

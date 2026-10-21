@@ -1,36 +1,55 @@
-import "dotenv/config";
+import { discoverParameters } from "./services/discover.js";
+import { config } from "./config.js";
+import {
+  WATCH_STATUSES,
+  RELEASE_TYPES,
+  PUBLICATION_STATUSES,
+  CONFIRMATION_STATUSES,
+  DATE_PRECISIONS,
+  WATCH_REGION,
+} from "../shared/catalog.js";
+import {
+  authorizeUser,
+  requireAdmin,
+  getUserProfile,
+  loginUser,
+  registerUser,
+  setAuthCookie,
+  clearAuthCookie,
+} from "./auth.js";
+import { tmdb, getOmdbRatings } from "./services/metadata.js";
+import { createApplication } from "./http/app.js";
+import { LRUCache } from "lru-cache";
+import { createHash } from "node:crypto";
+import {
+  buildMatchSocialContext,
+  invalidateSocialMatches,
+  type MatchSocialSignal,
+} from "./services/social-match.js";
+import type {
+  ReleaseType,
+  PublicationStatus,
+  ConfirmationStatus,
+  DatePrecision,
+} from "../shared/catalog.js";
+import { validateSavedMedia } from "./validation.js";
+import { PublicError } from "./errors.js";
+import type { WatchProgressDocument } from "./db/models.js";
 
-import bcrypt from "bcryptjs";
-import cors from "cors";
-import express from "express";
-import type { RequestHandler } from "express";
-import { createSchema, createYoga } from "graphql-yoga";
-import jwt from "jsonwebtoken";
-import mongoose, { Schema } from "mongoose";
+import { createSchema } from "graphql-yoga";
+import mongoose from "mongoose";
+import {
+  Rating,
+  WatchlistItem,
+  WatchProgress,
+  EpisodeProgress,
+  ReleaseEvent,
+  TasteProfile,
+} from "./db/models.js";
+import { typeDefs } from "./graphql/schema.js";
 
-const PORT = Number(process.env.PORT ?? 4000);
-const TMDB_BASE_URL = "https://api.themoviedb.org/3";
-const AUTH_COOKIE_NAME = "bingeverse_session";
-const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-me";
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
-const SUGGESTION_CACHE_TTL_MS = 1000 * 60 * 5;
-const SUGGESTION_NEXT_LETTERS = ["a", "e", "i", "o", "u", "r", "s", "t", "l", "n", "m", "h", "d"];
-
-type MediaType = "movie" | "tv";
-type WatchStatus = "PLAN_TO_WATCH" | "WATCHING" | "COMPLETED" | "ON_HOLD" | "DROPPED";
-type UserRole = "USER" | "EDITOR" | "ADMIN";
-type ReleaseType =
-  | "CINEMA_RELEASE"
-  | "MOVIE_PREMIERE"
-  | "MOVIE_CATALOG"
-  | "TV_SERIES_PREMIERE"
-  | "TV_SEASON"
-  | "TV_EPISODE"
-  | "TV_CATALOG";
-type PublicationStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED";
-type ConfirmationStatus = "ANNOUNCED" | "CONFIRMED" | "UNCONFIRMED" | "POSTPONED" | "CANCELLED";
-type DatePrecision = "EXACT" | "MONTH" | "QUARTER" | "YEAR" | "UNKNOWN";
-
+type MediaType = import("../shared/catalog.js").MediaType;
+type WatchStatus = import("../shared/catalog.js").WatchStatus;
 type TmdbMedia = {
   id: number;
   media_type?: MediaType;
@@ -69,221 +88,6 @@ type TmdbEpisode = {
   still_path?: string | null;
   vote_average?: number;
 };
-
-const WATCH_STATUSES: WatchStatus[] = [
-  "PLAN_TO_WATCH",
-  "WATCHING",
-  "COMPLETED",
-  "ON_HOLD",
-  "DROPPED",
-];
-const USER_ROLES: UserRole[] = ["USER", "EDITOR", "ADMIN"];
-const RELEASE_TYPES: ReleaseType[] = [
-  "CINEMA_RELEASE",
-  "MOVIE_PREMIERE",
-  "MOVIE_CATALOG",
-  "TV_SERIES_PREMIERE",
-  "TV_SEASON",
-  "TV_EPISODE",
-  "TV_CATALOG",
-];
-const PUBLICATION_STATUSES: PublicationStatus[] = ["DRAFT", "PUBLISHED", "ARCHIVED"];
-const CONFIRMATION_STATUSES: ConfirmationStatus[] = [
-  "ANNOUNCED",
-  "CONFIRMED",
-  "UNCONFIRMED",
-  "POSTPONED",
-  "CANCELLED",
-];
-const DATE_PRECISIONS: DatePrecision[] = ["EXACT", "MONTH", "QUARTER", "YEAR", "UNKNOWN"];
-
-const ratingSchema = new Schema(
-  {
-    userId: { type: String, required: true, index: true },
-    tmdbId: { type: Number, required: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
-    seasonNumber: { type: Number, default: null },
-    title: { type: String, required: true },
-    posterPath: { type: String, default: null },
-    releaseDate: { type: String, default: null },
-    voteAverage: { type: Number, default: 0 },
-    rating: { type: Number, required: true, min: 0.5, max: 10 },
-  },
-  { timestamps: true },
-);
-
-ratingSchema.index({ userId: 1, tmdbId: 1, mediaType: 1, seasonNumber: 1 }, { unique: true });
-
-const watchlistSchema = new Schema(
-  {
-    userId: { type: String, required: true, index: true },
-    tmdbId: { type: Number, required: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
-    title: { type: String, required: true },
-    posterPath: { type: String, default: null },
-    releaseDate: { type: String, default: null },
-    voteAverage: { type: Number, default: 0 },
-  },
-  { timestamps: true },
-);
-
-watchlistSchema.index({ userId: 1, tmdbId: 1, mediaType: 1 }, { unique: true });
-
-const watchProgressSchema = new Schema(
-  {
-    userId: { type: String, required: true, index: true },
-    tmdbId: { type: Number, required: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
-    title: { type: String, required: true },
-    posterPath: { type: String, default: null },
-    releaseDate: { type: String, default: null },
-    voteAverage: { type: Number, default: 0 },
-    status: { type: String, required: true, enum: WATCH_STATUSES, default: "PLAN_TO_WATCH" },
-    totalEpisodes: { type: Number, default: 0 },
-    watchedAt: { type: Date, default: null },
-    lastActivityAt: { type: Date, default: Date.now, index: true },
-  },
-  { timestamps: true },
-);
-
-watchProgressSchema.index({ userId: 1, tmdbId: 1, mediaType: 1 }, { unique: true });
-watchProgressSchema.index({ userId: 1, status: 1, lastActivityAt: -1 });
-
-const episodeProgressSchema = new Schema(
-  {
-    userId: { type: String, required: true, index: true },
-    tmdbId: { type: Number, required: true },
-    title: { type: String, required: true },
-    posterPath: { type: String, default: null },
-    releaseDate: { type: String, default: null },
-    voteAverage: { type: Number, default: 0 },
-    seasonNumber: { type: Number, required: true },
-    episodeNumber: { type: Number, required: true },
-    episodeTitle: { type: String, default: "" },
-    airDate: { type: String, default: null },
-    runtime: { type: Number, default: null },
-    stillPath: { type: String, default: null },
-    watchedAt: { type: Date, required: true, default: Date.now },
-  },
-  { timestamps: true },
-);
-
-episodeProgressSchema.index(
-  { userId: 1, tmdbId: 1, seasonNumber: 1, episodeNumber: 1 },
-  { unique: true },
-);
-episodeProgressSchema.index({ userId: 1, watchedAt: -1 });
-
-const releaseEventSchema = new Schema(
-  {
-    tmdbId: { type: Number, required: true, index: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"], index: true },
-    title: { type: String, required: true, trim: true },
-    posterPath: { type: String, default: null },
-    backdropPath: { type: String, default: null },
-    releaseDate: { type: String, default: null, index: true },
-    voteAverage: { type: Number, default: 0 },
-    popularity: { type: Number, default: 0, index: true },
-    genreIds: { type: [Number], default: [] },
-    provider: { type: String, required: true, trim: true, index: true },
-    region: { type: String, required: true, uppercase: true, trim: true, index: true },
-    datePrecision: { type: String, required: true, enum: DATE_PRECISIONS, default: "EXACT" },
-    releaseYear: { type: Number, default: null, index: true },
-    releaseMonth: { type: Number, default: null, index: true },
-    releaseQuarter: { type: Number, default: null },
-    releaseType: { type: String, required: true, enum: RELEASE_TYPES, index: true },
-    publicationStatus: {
-      type: String,
-      required: true,
-      enum: PUBLICATION_STATUSES,
-      default: "DRAFT",
-      index: true,
-    },
-    confirmationStatus: {
-      type: String,
-      required: true,
-      enum: CONFIRMATION_STATUSES,
-      default: "ANNOUNCED",
-      index: true,
-    },
-    seasonNumber: { type: Number, default: null },
-    episodeNumber: { type: Number, default: null },
-    sourceUrl: { type: String, default: null },
-    notes: { type: String, default: "" },
-    lastVerifiedAt: { type: Date, default: null },
-    createdBy: { type: String, required: true, index: true },
-    updatedBy: { type: String, required: true },
-  },
-  { timestamps: true },
-);
-
-releaseEventSchema.index({
-  publicationStatus: 1,
-  region: 1,
-  provider: 1,
-  releaseDate: 1,
-  releaseYear: 1,
-  releaseMonth: 1,
-});
-releaseEventSchema.index({
-  tmdbId: 1,
-  mediaType: 1,
-  provider: 1,
-  region: 1,
-  releaseType: 1,
-  releaseDate: 1,
-  seasonNumber: 1,
-  episodeNumber: 1,
-});
-
-const tasteProfileSchema = new Schema(
-  {
-    userId: { type: String, required: true, unique: true, index: true },
-    sourceHash: { type: String, required: true, index: true },
-    computedAt: { type: Date, required: true, default: Date.now, index: true },
-    ratingCount: { type: Number, required: true, default: 0 },
-    confidence: { type: Number, required: true, default: 0 },
-    averageRating: { type: Number, required: true, default: 0 },
-    summary: { type: String, default: "" },
-    favoriteMediaType: { type: String, default: null },
-    genrePreferences: { type: [Schema.Types.Mixed], default: [] },
-    actorPreferences: { type: [Schema.Types.Mixed], default: [] },
-    directorPreferences: { type: [Schema.Types.Mixed], default: [] },
-    storyPreferences: { type: [Schema.Types.Mixed], default: [] },
-    excludedGenres: { type: [Number], default: [] },
-    useViewingSignals: { type: Boolean, default: true },
-  },
-  { timestamps: true },
-);
-
-tasteProfileSchema.index({ userId: 1, computedAt: -1 });
-
-const storyDnaSchema = new Schema(
-  {
-    tmdbId: { type: Number, required: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
-    themes: { type: [String], default: [] },
-    source: { type: String, required: true, default: "tmdb-keywords" },
-    confidence: { type: Number, required: true, default: 0 },
-    updatedAt: { type: Date, default: Date.now },
-  },
-  { timestamps: true },
-);
-
-storyDnaSchema.index({ tmdbId: 1, mediaType: 1 }, { unique: true });
-
-const Rating = mongoose.models.Rating || mongoose.model("Rating", ratingSchema);
-const WatchlistItem =
-  mongoose.models.WatchlistItem || mongoose.model("WatchlistItem", watchlistSchema);
-const WatchProgress =
-  mongoose.models.WatchProgress || mongoose.model("WatchProgress", watchProgressSchema);
-const EpisodeProgress =
-  mongoose.models.EpisodeProgress || mongoose.model("EpisodeProgress", episodeProgressSchema);
-const ReleaseEvent =
-  mongoose.models.ReleaseEvent || mongoose.model("ReleaseEvent", releaseEventSchema);
-const TasteProfile =
-  mongoose.models.TasteProfile || mongoose.model("TasteProfile", tasteProfileSchema);
-const StoryDna = mongoose.models.StoryDna || mongoose.model("StoryDna", storyDnaSchema);
 
 function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
   const mediaType = raw.media_type ?? fallbackMedia ?? (raw.title ? "movie" : "tv");
@@ -343,18 +147,6 @@ type MatchScoreResult = {
   similarUserCount: number;
   reasons: string[];
   insufficientData: boolean;
-};
-
-type MatchSocialSignal = {
-  communityScore: number | null;
-  communityRatingCount: number;
-  similarUserScore: number | null;
-  similarUserCount: number;
-};
-
-type MatchSocialContext = {
-  signals: Map<string, MatchSocialSignal>;
-  similarUserCount: number;
 };
 
 const GENRE_NAMES: Record<number, string> = {
@@ -557,26 +349,34 @@ function preferenceList(
 
 async function tasteSourceHash(userId: string) {
   const [ratings, progress] = await Promise.all([
-    Rating.find({ userId }).select("tmdbId mediaType seasonNumber rating updatedAt").lean(),
+    Rating.find({ userId })
+      .sort({ tmdbId: 1, mediaType: 1, seasonNumber: 1 })
+      .select("tmdbId mediaType seasonNumber rating updatedAt")
+      .lean(),
     WatchProgress.find({ userId })
+      .sort({ tmdbId: 1, mediaType: 1 })
       .select("tmdbId mediaType status updatedAt lastActivityAt")
       .lean(),
   ]);
-  return JSON.stringify({
-    ratings: ratings.map((rating: any) => [
-      rating.tmdbId,
-      rating.mediaType,
-      rating.seasonNumber ?? null,
-      rating.rating,
-      new Date(rating.updatedAt ?? 0).getTime(),
-    ]),
-    progress: progress.map((item: any) => [
-      item.tmdbId,
-      item.mediaType,
-      item.status,
-      new Date(item.updatedAt ?? item.lastActivityAt ?? 0).getTime(),
-    ]),
-  });
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        ratings: ratings.map((rating: any) => [
+          rating.tmdbId,
+          rating.mediaType,
+          rating.seasonNumber ?? null,
+          rating.rating,
+          new Date(rating.updatedAt ?? 0).getTime(),
+        ]),
+        progress: progress.map((item: any) => [
+          item.tmdbId,
+          item.mediaType,
+          item.status,
+          new Date(item.updatedAt ?? item.lastActivityAt ?? 0).getTime(),
+        ]),
+      }),
+    )
+    .digest("hex");
 }
 
 async function buildTasteProfile(userId: string, force = false): Promise<BuiltTasteProfile> {
@@ -677,7 +477,9 @@ async function buildTasteProfile(userId: string, force = false): Promise<BuiltTa
     useViewingSignals: true,
   };
 
-  await TasteProfile.findOneAndUpdate({ userId }, { $set: profile }, { upsert: true, new: true });
+  if (details.every((entry) => entry.details)) {
+    await TasteProfile.findOneAndUpdate({ userId }, { $set: profile }, { upsert: true, new: true });
+  }
   return profile;
 }
 
@@ -696,155 +498,6 @@ function getMatchItemKey(item: {
   return mediaType && Number.isFinite(Number(tmdbId))
     ? matchItemKey(mediaType, Number(tmdbId))
     : null;
-}
-
-function ratingAverageToSocialScore(average: number, count: number, fullWeightAt: number) {
-  const rawScore = clamp(average * 10, 0, 100);
-  const confidence = clamp(count / fullWeightAt, 0.25, 1);
-  return Math.round(clamp(50 + (rawScore - 50) * confidence, 0, 100));
-}
-
-async function buildMatchSocialContext(
-  userId: string,
-  items: Array<{ id?: number; tmdbId?: number; mediaType?: MediaType; media_type?: MediaType }>,
-): Promise<MatchSocialContext> {
-  const uniqueItems = [
-    ...new Map(
-      items
-        .map((item) => {
-          const mediaType = item.mediaType ?? item.media_type;
-          const tmdbId = Number(item.tmdbId ?? item.id);
-          return mediaType && Number.isFinite(tmdbId)
-            ? [matchItemKey(mediaType, tmdbId), { mediaType, tmdbId }]
-            : null;
-        })
-        .filter(Boolean) as Array<[string, { mediaType: MediaType; tmdbId: number }]>,
-    ).values(),
-  ];
-
-  if (!uniqueItems.length) return { signals: new Map(), similarUserCount: 0 };
-
-  const itemFilter = uniqueItems.map((item) => ({
-    tmdbId: item.tmdbId,
-    mediaType: item.mediaType,
-  }));
-  const currentRatings = await Rating.find({ userId, seasonNumber: null })
-    .select("tmdbId mediaType rating")
-    .lean();
-  const currentRatingMap = new Map(
-    currentRatings.map((rating: any) => [
-      matchItemKey(rating.mediaType, Number(rating.tmdbId)),
-      Number(rating.rating ?? 0),
-    ]),
-  );
-
-  const communityRatings = await Rating.find({
-    seasonNumber: null,
-    userId: { $ne: userId },
-    $or: itemFilter,
-  })
-    .select("userId tmdbId mediaType rating")
-    .lean();
-
-  const communityStats = new Map<string, { total: number; count: number }>();
-  for (const rating of communityRatings) {
-    const key = matchItemKey(rating.mediaType, Number(rating.tmdbId));
-    const current = communityStats.get(key) ?? { total: 0, count: 0 };
-    current.total += Number(rating.rating ?? 0);
-    current.count += 1;
-    communityStats.set(key, current);
-  }
-
-  const candidateSimilarity = new Map<string, { diffTotal: number; overlap: number }>();
-  if (currentRatings.length >= 3) {
-    const overlapFilter = currentRatings.map((rating: any) => ({
-      tmdbId: rating.tmdbId,
-      mediaType: rating.mediaType,
-    }));
-    const overlapRatings = await Rating.find({
-      seasonNumber: null,
-      userId: { $ne: userId },
-      $or: overlapFilter,
-    })
-      .select("userId tmdbId mediaType rating")
-      .lean();
-
-    for (const rating of overlapRatings) {
-      const key = matchItemKey(rating.mediaType, Number(rating.tmdbId));
-      const ownRating = currentRatingMap.get(key);
-      if (ownRating == null) continue;
-      const userKey = String(rating.userId);
-      const current = candidateSimilarity.get(userKey) ?? { diffTotal: 0, overlap: 0 };
-      current.diffTotal += Math.abs(ownRating - Number(rating.rating ?? 0));
-      current.overlap += 1;
-      candidateSimilarity.set(userKey, current);
-    }
-  }
-
-  const similarUsers = [...candidateSimilarity.entries()]
-    .map(([candidateUserId, stats]) => {
-      const averageDiff = stats.diffTotal / Math.max(stats.overlap, 1);
-      const agreement = clamp(1 - averageDiff / 10, 0, 1);
-      const overlapConfidence = clamp(stats.overlap / 5, 0.45, 1);
-      return {
-        userId: candidateUserId,
-        similarity: agreement * overlapConfidence,
-        overlap: stats.overlap,
-      };
-    })
-    .filter((item) => item.overlap >= 2 && item.similarity >= 0.42)
-    .sort((a, b) => b.similarity - a.similarity || b.overlap - a.overlap)
-    .slice(0, 25);
-
-  const similarStats = new Map<string, { weightedTotal: number; weight: number; count: number }>();
-  if (similarUsers.length) {
-    const similarityByUser = new Map(similarUsers.map((user) => [user.userId, user.similarity]));
-    const similarRatings = await Rating.find({
-      seasonNumber: null,
-      userId: { $in: similarUsers.map((user) => user.userId) },
-      $or: itemFilter,
-    })
-      .select("userId tmdbId mediaType rating")
-      .lean();
-
-    for (const rating of similarRatings) {
-      const similarity = similarityByUser.get(String(rating.userId));
-      if (!similarity) continue;
-      const key = matchItemKey(rating.mediaType, Number(rating.tmdbId));
-      const current = similarStats.get(key) ?? { weightedTotal: 0, weight: 0, count: 0 };
-      current.weightedTotal += Number(rating.rating ?? 0) * similarity;
-      current.weight += similarity;
-      current.count += 1;
-      similarStats.set(key, current);
-    }
-  }
-
-  const signals = new Map<string, MatchSocialSignal>();
-  for (const item of uniqueItems) {
-    const key = matchItemKey(item.mediaType, item.tmdbId);
-    const community = communityStats.get(key);
-    const similar = similarStats.get(key);
-    signals.set(key, {
-      communityScore: community
-        ? ratingAverageToSocialScore(
-            community.total / Math.max(community.count, 1),
-            community.count,
-            8,
-          )
-        : null,
-      communityRatingCount: community?.count ?? 0,
-      similarUserScore: similar
-        ? ratingAverageToSocialScore(
-            similar.weightedTotal / Math.max(similar.weight, 0.01),
-            similar.count,
-            5,
-          )
-        : null,
-      similarUserCount: similar?.count ?? 0,
-    });
-  }
-
-  return { signals, similarUserCount: similarUsers.length };
 }
 
 function scoreFromProfile(
@@ -1033,7 +686,7 @@ function scoreFromProfile(
 }
 
 async function scoreMediaBatchForContext(items: any[], context: any) {
-  const user = context?.user ?? getAuthUserFromRequest(context?.request);
+  const user = context?.user ?? null;
   if (!user || !hasDb() || !items.length) return items;
   const [profile, socialContext] = await Promise.all([
     buildTasteProfile(user.id),
@@ -1050,7 +703,7 @@ async function scoreMediaBatchForContext(items: any[], context: any) {
 }
 
 async function scoreReleaseEventsForContext(items: any[], context: any) {
-  const user = context?.user ?? getAuthUserFromRequest(context?.request);
+  const user = context?.user ?? null;
   if (!user || !hasDb() || !items.length) return items;
   const scoreItems = items.map((item) => ({
     id: item.tmdbId,
@@ -1077,11 +730,14 @@ async function scoreReleaseEventsForContext(items: any[], context: any) {
   }));
 }
 
-const suggestionCache = new Map<
+const suggestionCache = new LRUCache<
   string,
   { expiresAt: number; items: SearchSuggestionCandidate[] }
->();
-const seasonCache = new Map<string, { expiresAt: number; data: any }>();
+>({ max: config.METADATA_CACHE_MAX, ttl: config.METADATA_CACHE_TTL_MS });
+const seasonCache = new LRUCache<string, { expiresAt: number; data: any }>({
+  max: config.METADATA_CACHE_MAX,
+  ttl: config.METADATA_CACHE_TTL_MS,
+});
 
 function normalizedSearchText(value: string) {
   return value
@@ -1184,20 +840,10 @@ async function searchTmdbSuggestions(query: string) {
     include_adult: false,
   };
 
-  const expansionQueries =
-    cacheKey.length === 4 ? SUGGESTION_NEXT_LETTERS.map((letter) => `${query}${letter}`) : [];
-
-  const [multi, movies, tv, ...expanded] = await Promise.all([
+  const [multi, movies, tv] = await Promise.all([
     tmdb<any>("/search/multi", searchParams),
     tmdb<any>("/search/movie", searchParams),
     tmdb<any>("/search/tv", searchParams),
-    ...expansionQueries.map((expandedQuery) =>
-      tmdb<any>("/search/multi", {
-        query: expandedQuery,
-        page: 1,
-        include_adult: false,
-      }),
-    ),
   ]);
 
   const seen = new Set<string>();
@@ -1217,20 +863,7 @@ async function searchTmdbSuggestions(query: string) {
     suggestionSourceRank: index,
   }));
 
-  const expandedCandidates = expanded.flatMap((result) =>
-    (result.results ?? [])
-      .filter((item: TmdbMedia) => item.media_type === "movie" || item.media_type === "tv")
-      .map((item: TmdbMedia) => normalizeMedia(item) as SearchSuggestionCandidate),
-  );
-
-  const results: SearchSuggestionCandidate[] = [
-    ...directCandidates.map((item) => ({
-      ...item,
-    })),
-    ...expandedCandidates,
-  ];
-
-  const items = results.filter((item) => {
+  const items = directCandidates.filter((item) => {
     const key = `${item.mediaType}:${item.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -1238,7 +871,7 @@ async function searchTmdbSuggestions(query: string) {
   });
 
   suggestionCache.set(cacheKey, {
-    expiresAt: Date.now() + SUGGESTION_CACHE_TTL_MS,
+    expiresAt: Date.now() + config.METADATA_CACHE_TTL_MS,
     items,
   });
 
@@ -1246,15 +879,7 @@ async function searchTmdbSuggestions(query: string) {
 }
 
 function toSavedInput(input: any): SavedMedia {
-  return {
-    userId: input.userId,
-    tmdbId: input.tmdbId,
-    mediaType: input.mediaType,
-    title: input.title,
-    posterPath: input.posterPath ?? null,
-    releaseDate: input.releaseDate ?? null,
-    voteAverage: input.voteAverage ?? 0,
-  };
+  return validateSavedMedia(input);
 }
 
 function toProgressInput(input: any, userId: string) {
@@ -1317,10 +942,11 @@ async function getAvailableEpisodes(tvId: number) {
     .sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber);
 }
 
-async function enrichWatchProgress(doc: any, includeNextEpisode = false) {
+async function enrichWatchProgress(doc: any, includeNextEpisode = false, episodeCount?: number) {
   const watchedEpisodes =
     doc.mediaType === "tv"
-      ? await EpisodeProgress.countDocuments({ userId: doc.userId, tmdbId: doc.tmdbId })
+      ? (episodeCount ??
+        (await EpisodeProgress.countDocuments({ userId: doc.userId, tmdbId: doc.tmdbId })))
       : doc.status === "COMPLETED"
         ? 1
         : 0;
@@ -1359,6 +985,25 @@ async function enrichWatchProgress(doc: any, includeNextEpisode = false) {
     lastActivityAt: doc.lastActivityAt?.getTime?.() ?? doc.updatedAt?.getTime?.() ?? Date.now(),
     nextEpisode,
   };
+}
+
+async function enrichWatchProgressList(docs: WatchProgressDocument[], includeNextEpisode = false) {
+  if (!docs.length) return [];
+  const counts = await EpisodeProgress.aggregate<{ _id: number; count: number }>([
+    {
+      $match: {
+        userId: docs[0].userId,
+        tmdbId: { $in: docs.filter((doc) => doc.mediaType === "tv").map((doc) => doc.tmdbId) },
+      },
+    },
+    { $group: { _id: "$tmdbId", count: { $sum: 1 } } },
+  ]);
+  const countByTitle = new Map(counts.map((item) => [item._id, item.count]));
+  return Promise.all(
+    docs.map((doc) =>
+      enrichWatchProgress(doc, includeNextEpisode, countByTitle.get(doc.tmdbId) ?? 0),
+    ),
+  );
 }
 
 async function upsertWatchProgress(input: any, userId: string, patch: Record<string, unknown>) {
@@ -1539,49 +1184,10 @@ async function personalizedRecommendationSections(
   ].filter((section) => section.items.length || section.title === "Recommended For You");
 }
 
-function parseAdminEmails() {
-  return (process.env.ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function isAdminEmail(email?: string | null) {
-  return Boolean(email && parseAdminEmails().includes(email.toLowerCase()));
-}
-
-async function getUserProfile(user: { id: string; name: string; email: string }) {
-  const doc = hasDb() ? await User.findById(user.id) : null;
-  const role: UserRole =
-    doc && USER_ROLES.includes(doc.role) ? doc.role : isAdminEmail(user.email) ? "ADMIN" : "USER";
-
-  if (doc && isAdminEmail(user.email) && doc.role !== "ADMIN") {
-    doc.role = "ADMIN";
-    await doc.save();
-  }
-
-  return {
-    id: user.id,
-    name: doc?.name ?? user.name,
-    email: doc?.email ?? user.email,
-    role,
-    isAdmin: role === "ADMIN",
-  };
-}
-
-async function requireAdmin(context: any) {
-  const user = requireAuth(context);
-  const profile = await getUserProfile(user);
-  if (profile.role !== "ADMIN" && profile.role !== "EDITOR") {
-    throw new Error("Admin access required.");
-  }
-  return profile;
-}
-
 function normalizeUserRating(value: unknown) {
   const rating = Math.round(Number(value) * 2) / 2;
   if (!Number.isFinite(rating) || rating < 0.5 || rating > 10) {
-    throw new Error("Bewertung muss zwischen 0.5 und 10 liegen.");
+    throw new PublicError("Bewertung muss zwischen 0.5 und 10 liegen.");
   }
   return rating;
 }
@@ -1691,20 +1297,26 @@ async function markSeasonCompletedFromRating(input: any, userId: string) {
 }
 
 async function connectDb() {
-  if (!process.env.MONGODB_URI) {
+  mongoose.set("bufferCommands", false);
+  mongoose.set("maxTimeMS", config.DATABASE_MAX_TIME_MS);
+  if (!config.MONGODB_URI) {
     console.warn("MONGODB_URI missing. TMDB queries work, MongoDB user data is disabled.");
     return;
   }
 
   try {
-    await mongoose.connect(process.env.MONGODB_URI, {
-      dbName: process.env.MONGODB_DB ?? "binge_verse",
+    await mongoose.connect(config.MONGODB_URI, {
+      dbName: config.MONGODB_DB,
+      maxPoolSize: config.DATABASE_POOL_SIZE,
+      serverSelectionTimeoutMS: config.DATABASE_MAX_TIME_MS,
+      autoIndex: !config.isProduction,
     });
     console.log("MongoDB connected");
   } catch (error) {
+    if (config.isProduction) throw new Error("MongoDB connection failed during startup.");
     console.warn(
       "MongoDB connection failed. Continuing without MongoDB-backed features.",
-      error instanceof Error ? error.message : error,
+      error instanceof Error ? error.name : "ConnectionError",
     );
   }
 }
@@ -1715,704 +1327,14 @@ function hasDb() {
 
 function assertDb() {
   if (!hasDb()) {
-    throw new Error("MongoDB is not connected. Set MONGODB_URI in .env.");
+    throw new PublicError("Dienst vorübergehend nicht verfügbar.");
   }
 }
-
-function parseCookies(cookieHeader?: string) {
-  if (!cookieHeader) return {} as Record<string, string>;
-
-  return cookieHeader.split(";").reduce<Record<string, string>>((acc, rawPair) => {
-    const pair = rawPair.trim();
-    if (!pair) return acc;
-    const equalIndex = pair.indexOf("=");
-    const key = equalIndex >= 0 ? pair.slice(0, equalIndex) : pair;
-    const value = equalIndex >= 0 ? decodeURIComponent(pair.slice(equalIndex + 1)) : "";
-    acc[key] = value;
-    return acc;
-  }, {});
-}
-
-function getAuthUserFromRequest(request: any) {
-  const cookieHeader =
-    typeof request?.headers?.get === "function"
-      ? (request.headers.get("cookie") ?? "")
-      : (request?.headers?.cookie ?? "");
-
-  const cookies = parseCookies(cookieHeader);
-  const token = cookies[AUTH_COOKIE_NAME];
-  if (!token) return null;
-
-  try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; email: string; name?: string };
-    return { id: payload.sub, email: payload.email, name: payload.name ?? "" };
-  } catch {
-    return null;
-  }
-}
-
-function setAuthCookie(response: any, user: { id: string; name: string; email: string }) {
-  if (!response || typeof response.setHeader !== "function") return;
-
-  const token = jwt.sign({ sub: user.id, email: user.email, name: user.name }, JWT_SECRET, {
-    expiresIn: "7d",
-  });
-  const secureFlag = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  response.setHeader(
-    "Set-Cookie",
-    `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}${secureFlag}`,
-  );
-}
-
-function clearAuthCookie(response: any) {
-  if (!response || typeof response.setHeader !== "function") return;
-
-  const secureFlag = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  response.setHeader(
-    "Set-Cookie",
-    `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`,
-  );
-}
-
-function requireAuth(context: any) {
-  const user = context?.user ?? getAuthUserFromRequest(context?.request);
-  if (!user) throw new Error("Authentication required.");
-  return user;
-}
-
-function authorizeUser(context: any, userId?: string | null) {
-  const user = context?.user ?? getAuthUserFromRequest(context?.request);
-  if (!user) throw new Error("Authentication required.");
-  if (userId && user.id !== userId) throw new Error("Unauthorized.");
-  return user.id;
-}
-
-async function tmdb<T>(
-  path: string,
-  params: Record<string, string | number | boolean | undefined> = {},
-) {
-  const key = process.env.TMDB_API_KEY;
-  if (!key) throw new Error("TMDB_API_KEY missing. Set it in .env.");
-
-  const url = new URL(`${TMDB_BASE_URL}${path}`);
-  url.searchParams.set("api_key", key);
-  url.searchParams.set("language", process.env.TMDB_LANGUAGE ?? "de-DE");
-
-  for (const [name, value] of Object.entries(params)) {
-    if (value !== undefined && value !== "") url.searchParams.set(name, String(value));
-  }
-
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`TMDB request failed ${response.status}: ${path}`);
-  }
-
-  return response.json() as Promise<T>;
-}
-
-async function getOmdbRatings(imdbId?: string | null) {
-  const omdbKey = process.env.OMDB_API_KEY;
-  if (!imdbId || !omdbKey) return { imdbRating: null, rottenTomatoesRating: null };
-
-  try {
-    const url = new URL("https://www.omdbapi.com/");
-    url.searchParams.set("i", imdbId);
-    url.searchParams.set("apikey", omdbKey);
-    const data = await fetch(url).then((res) => res.json());
-    const rt = (data.Ratings ?? []).find((rating: any) => rating.Source === "Rotten Tomatoes");
-
-    return {
-      imdbRating: data.imdbRating && data.imdbRating !== "N/A" ? data.imdbRating : null,
-      rottenTomatoesRating: rt?.Value ?? null,
-    };
-  } catch {
-    return { imdbRating: null, rottenTomatoesRating: null };
-  }
-}
-
-const typeDefs = /* GraphQL */ `
-  enum MediaType {
-    movie
-    tv
-  }
-
-  enum WatchStatus {
-    PLAN_TO_WATCH
-    WATCHING
-    COMPLETED
-    ON_HOLD
-    DROPPED
-  }
-
-  enum UserRole {
-    USER
-    EDITOR
-    ADMIN
-  }
-
-  enum ReleaseType {
-    CINEMA_RELEASE
-    MOVIE_PREMIERE
-    MOVIE_CATALOG
-    TV_SERIES_PREMIERE
-    TV_SEASON
-    TV_EPISODE
-    TV_CATALOG
-  }
-
-  enum PublicationStatus {
-    DRAFT
-    PUBLISHED
-    ARCHIVED
-  }
-
-  enum ConfirmationStatus {
-    ANNOUNCED
-    CONFIRMED
-    UNCONFIRMED
-    POSTPONED
-    CANCELLED
-  }
-
-  enum DatePrecision {
-    EXACT
-    MONTH
-    QUARTER
-    YEAR
-    UNKNOWN
-  }
-
-  type MediaItem {
-    id: Int!
-    mediaType: MediaType!
-    title: String!
-    posterPath: String
-    backdropPath: String
-    overview: String!
-    releaseDate: String
-    popularity: Float!
-    voteAverage: Float!
-    voteCount: Int!
-    genreIds: [Int!]!
-    matchScore: MatchScore
-  }
-
-  type MatchScore {
-    score: Int
-    label: String!
-    color: String!
-    confidence: Int!
-    tasteScore: Int
-    communityScore: Int
-    communityRatingCount: Int!
-    similarUserScore: Int
-    similarUserCount: Int!
-    reasons: [String!]!
-    insufficientData: Boolean!
-  }
-
-  type TastePreference {
-    id: String!
-    name: String!
-    score: Int!
-    observations: Int!
-    averageRating: Float!
-  }
-
-  type TasteDNAProfile {
-    userId: ID!
-    computedAt: Float!
-    ratingCount: Int!
-    confidence: Int!
-    averageRating: Float!
-    summary: String!
-    favoriteMediaType: MediaType
-    genrePreferences: [TastePreference!]!
-    actorPreferences: [TastePreference!]!
-    directorPreferences: [TastePreference!]!
-    storyPreferences: [TastePreference!]!
-    excludedGenres: [Int!]!
-    useViewingSignals: Boolean!
-  }
-
-  type RatingBucket {
-    rating: Float!
-    count: Int!
-  }
-
-  type BingeStats {
-    userId: ID!
-    moviesWatched: Int!
-    tvSeriesWatched: Int!
-    episodesWatched: Int!
-    moviesRated: Int!
-    seriesRated: Int!
-    averageRating: Float!
-    estimatedMinutesWatched: Int!
-    ratingDistribution: [RatingBucket!]!
-    topRatedMovies: [RatingEntry!]!
-    topRatedSeries: [RatingEntry!]!
-    completedSeries: Int!
-    watchingSeries: Int!
-  }
-
-  type BingeRecommendationSection {
-    title: String!
-    subtitle: String
-    items: [MediaItem!]!
-  }
-
-  input MatchScoreInput {
-    tmdbId: Int!
-    mediaType: MediaType!
-    title: String
-    overview: String
-    voteAverage: Float
-    popularity: Float
-    genreIds: [Int!]
-  }
-
-  type Genre {
-    id: Int!
-    name: String!
-  }
-
-  type CastMember {
-    id: Int!
-    name: String!
-    character: String
-    profilePath: String
-  }
-
-  type Provider {
-    providerId: Int!
-    providerName: String!
-    logoPath: String
-  }
-
-  type WatchProviders {
-    link: String
-    region: String!
-    flatrate: [Provider!]!
-    rent: [Provider!]!
-    buy: [Provider!]!
-  }
-
-  type Season {
-    seasonNumber: Int!
-    name: String!
-    overview: String!
-    posterPath: String
-    airDate: String
-    episodeCount: Int!
-  }
-
-  type Episode {
-    seasonNumber: Int!
-    episodeNumber: Int!
-    name: String!
-    overview: String!
-    airDate: String
-    runtime: Int
-    stillPath: String
-    voteAverage: Float!
-    watched: Boolean!
-    watchedAt: Float
-  }
-
-  type SeasonDetails {
-    seasonNumber: Int!
-    name: String!
-    overview: String!
-    posterPath: String
-    airDate: String
-    episodeCount: Int!
-    episodes: [Episode!]!
-  }
-
-  type MovieDetails {
-    id: Int!
-    mediaType: MediaType!
-    title: String!
-    tagline: String
-    overview: String!
-    posterPath: String
-    backdropPath: String
-    releaseDate: String
-    runtime: Int
-    numberOfSeasons: Int
-    numberOfEpisodes: Int
-    genres: [Genre!]!
-    seasons: [Season!]!
-    voteAverage: Float!
-    voteCount: Int!
-    imdbRating: String
-    rottenTomatoesRating: String
-    imdbId: String
-    cast: [CastMember!]!
-    recommendations: [MediaItem!]!
-    watchProviders: WatchProviders
-    trailerKey: String
-    myRating: Float
-    inWatchlist: Boolean!
-    matchScore: MatchScore
-  }
-
-  type HomeData {
-    featured: MediaItem
-    trending: [MediaItem!]!
-    trendingMovies: [MediaItem!]!
-    trendingTv: [MediaItem!]!
-    popularMovies: [MediaItem!]!
-    popularTv: [MediaItem!]!
-    topMovies: [MediaItem!]!
-    topTv: [MediaItem!]!
-  }
-
-  type MediaItemConnection {
-    results: [MediaItem!]!
-    page: Int!
-    totalPages: Int!
-    totalResults: Int!
-  }
-
-  type UserProfile {
-    id: ID!
-    name: String!
-    email: String!
-    role: UserRole!
-    isAdmin: Boolean!
-  }
-
-  type AuthPayload {
-    user: UserProfile!
-  }
-
-  type SavedItem {
-    id: ID!
-    tmdbId: Int!
-    mediaType: MediaType!
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float!
-    addedAt: Float!
-  }
-
-  type RatingEntry {
-    id: ID!
-    tmdbId: Int!
-    mediaType: MediaType!
-    seasonNumber: Int
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float!
-    addedAt: Float!
-    rating: Float!
-    ratedAt: Float!
-  }
-
-  type WatchProgress {
-    id: ID!
-    tmdbId: Int!
-    mediaType: MediaType!
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float!
-    status: WatchStatus!
-    totalEpisodes: Int!
-    watchedEpisodes: Int!
-    watchedAt: Float
-    lastActivityAt: Float!
-    nextEpisode: Episode
-  }
-
-  type ReleaseEvent {
-    id: ID!
-    tmdbId: Int!
-    mediaType: MediaType!
-    title: String!
-    posterPath: String
-    backdropPath: String
-    voteAverage: Float!
-    popularity: Float!
-    genreIds: [Int!]!
-    provider: String!
-    region: String!
-    releaseDate: String
-    datePrecision: DatePrecision!
-    releaseYear: Int
-    releaseMonth: Int
-    releaseQuarter: Int
-    releaseType: ReleaseType!
-    publicationStatus: PublicationStatus!
-    confirmationStatus: ConfirmationStatus!
-    seasonNumber: Int
-    episodeNumber: Int
-    sourceUrl: String
-    notes: String!
-    createdBy: String!
-    updatedBy: String!
-    createdAt: Float!
-    updatedAt: Float!
-    isWatchlisted: Boolean!
-    matchScore: MatchScore
-  }
-
-  type ReleaseEventConnection {
-    items: [ReleaseEvent!]!
-    total: Int!
-  }
-
-  type AdminReleaseStats {
-    releasesThisMonth: Int!
-    upcomingReleases: Int!
-    drafts: Int!
-    unconfirmed: Int!
-    recentlyEdited: [ReleaseEvent!]!
-  }
-
-  input RegisterInput {
-    name: String!
-    email: String!
-    password: String!
-  }
-
-  input LoginInput {
-    email: String!
-    password: String!
-  }
-
-  input SavedItemInput {
-    userId: String
-    tmdbId: Int!
-    mediaType: MediaType!
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float
-  }
-
-  input RatingInput {
-    userId: String
-    tmdbId: Int!
-    mediaType: MediaType!
-    seasonNumber: Int
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float
-    rating: Float!
-  }
-
-  input WatchProgressInput {
-    userId: String
-    tmdbId: Int!
-    mediaType: MediaType!
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float
-    status: WatchStatus!
-    totalEpisodes: Int
-  }
-
-  input ReleaseEventInput {
-    tmdbId: Int!
-    mediaType: MediaType!
-    title: String!
-    posterPath: String
-    backdropPath: String
-    voteAverage: Float
-    popularity: Float
-    genreIds: [Int!]
-    provider: String!
-    region: String!
-    releaseDate: String
-    datePrecision: DatePrecision!
-    releaseYear: Int
-    releaseMonth: Int
-    releaseQuarter: Int
-    releaseType: ReleaseType!
-    publicationStatus: PublicationStatus
-    confirmationStatus: ConfirmationStatus!
-    seasonNumber: Int
-    episodeNumber: Int
-    sourceUrl: String
-    notes: String
-  }
-
-  input ReleaseEventPatchInput {
-    tmdbId: Int
-    mediaType: MediaType
-    title: String
-    posterPath: String
-    backdropPath: String
-    voteAverage: Float
-    popularity: Float
-    genreIds: [Int!]
-    provider: String
-    region: String
-    releaseDate: String
-    datePrecision: DatePrecision
-    releaseYear: Int
-    releaseMonth: Int
-    releaseQuarter: Int
-    releaseType: ReleaseType
-    publicationStatus: PublicationStatus
-    confirmationStatus: ConfirmationStatus
-    seasonNumber: Int
-    episodeNumber: Int
-    sourceUrl: String
-    notes: String
-  }
-
-  input ReleaseEventFilterInput {
-    region: String
-    providers: [String!]
-    mediaType: MediaType
-    releaseTypes: [ReleaseType!]
-    confirmationStatuses: [ConfirmationStatus!]
-    publicationStatus: PublicationStatus
-    genreIds: [Int!]
-    tmdbId: Int
-    year: Int
-    month: Int
-    fromDate: String
-    toDate: String
-    datePrecision: DatePrecision
-    sort: String
-    limit: Int
-    offset: Int
-  }
-
-  input EpisodeProgressInput {
-    userId: String
-    tmdbId: Int!
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float
-    totalEpisodes: Int
-    seasonNumber: Int!
-    episodeNumber: Int!
-    episodeTitle: String
-    airDate: String
-    runtime: Int
-    stillPath: String
-    watched: Boolean!
-  }
-
-  input SeasonEpisodeInput {
-    episodeNumber: Int!
-    episodeTitle: String
-    airDate: String
-    runtime: Int
-    stillPath: String
-  }
-
-  input SeasonProgressInput {
-    userId: String
-    tmdbId: Int!
-    title: String!
-    posterPath: String
-    releaseDate: String
-    voteAverage: Float
-    totalEpisodes: Int
-    seasonNumber: Int!
-    watched: Boolean!
-    episodes: [SeasonEpisodeInput!]!
-  }
-
-  type Query {
-    me: UserProfile
-    home: HomeData!
-    discover(
-      media: MediaType!
-      genre: String
-      year: String
-      sort: String
-      page: Int
-      language: String
-      provider: String
-    ): [MediaItem!]!
-    discoverPage(
-      media: MediaType!
-      genre: String
-      year: String
-      sort: String
-      page: Int
-      language: String
-      provider: String
-    ): MediaItemConnection!
-    search(query: String!, page: Int, language: String): [MediaItem!]!
-    searchPage(query: String!, page: Int, language: String): MediaItemConnection!
-    searchSuggestions(query: String!, limit: Int): [MediaItem!]!
-    genres(media: MediaType!): [Genre!]!
-    details(media: MediaType!, id: Int!, userId: String): MovieDetails!
-    recommendations(media: MediaType!, id: Int!): [MediaItem!]!
-    watchlist(userId: String!): [SavedItem!]!
-    ratings(userId: String!): [RatingEntry!]!
-    seasonDetails(tvId: Int!, seasonNumber: Int!, userId: String): SeasonDetails!
-    watchProgress(userId: String!, tmdbId: Int!, mediaType: MediaType!): WatchProgress
-    watchProgressList(userId: String!, mediaType: MediaType, status: WatchStatus): [WatchProgress!]!
-    continueWatching(userId: String!): [WatchProgress!]!
-    tasteProfile(userId: String): TasteDNAProfile!
-    bingeStats(userId: String): BingeStats!
-    personalizedRecommendations(
-      userId: String
-      mediaType: MediaType
-      limit: Int
-    ): [BingeRecommendationSection!]!
-    matchScores(userId: String, items: [MatchScoreInput!]!): [MatchScore!]!
-    matchExplanation(userId: String, item: MatchScoreInput!): MatchScore!
-    releaseEvents(filter: ReleaseEventFilterInput): ReleaseEventConnection!
-    releaseEventsByTitle(tmdbId: Int!, mediaType: MediaType!, region: String): [ReleaseEvent!]!
-    watchlistReleaseEvents(userId: String!, region: String): [ReleaseEvent!]!
-    adminReleaseEvents(filter: ReleaseEventFilterInput): ReleaseEventConnection!
-    adminReleaseStats: AdminReleaseStats!
-  }
-
-  type Mutation {
-    register(input: RegisterInput!): AuthPayload!
-    login(input: LoginInput!): AuthPayload!
-    logout: Boolean!
-    addWatchlist(input: SavedItemInput!): SavedItem!
-    removeWatchlist(userId: String!, tmdbId: Int!, mediaType: MediaType!): Boolean!
-    rateMovie(input: RatingInput!): RatingEntry!
-    removeRating(userId: String!, tmdbId: Int!, mediaType: MediaType!, seasonNumber: Int): Boolean!
-    setWatchStatus(input: WatchProgressInput!): WatchProgress!
-    removeWatchProgress(userId: String!, tmdbId: Int!, mediaType: MediaType!): Boolean!
-    setEpisodeWatched(input: EpisodeProgressInput!): WatchProgress!
-    setSeasonWatched(input: SeasonProgressInput!): WatchProgress!
-    createReleaseEvent(input: ReleaseEventInput!): ReleaseEvent!
-    updateReleaseEvent(id: ID!, input: ReleaseEventPatchInput!): ReleaseEvent!
-    deleteReleaseEvent(id: ID!): Boolean!
-    bulkCreateReleaseEvents(inputs: [ReleaseEventInput!]!): [ReleaseEvent!]!
-    bulkUpdateReleaseEvents(ids: [ID!]!, input: ReleaseEventPatchInput!): [ReleaseEvent!]!
-    bulkDeleteReleaseEvents(ids: [ID!]!): Boolean!
-    recomputeTasteProfile(userId: String): TasteDNAProfile!
-  }
-`;
-
-const userSchema = new Schema(
-  {
-    name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
-    passwordHash: { type: String, required: true },
-    role: { type: String, required: true, enum: USER_ROLES, default: "USER", index: true },
-  },
-  { timestamps: true },
-);
-
-const User = mongoose.models.User || mongoose.model("User", userSchema);
 
 const resolvers = {
   Query: {
     me: async (_root: unknown, _args: any, context: any) => {
-      const user = context?.user ?? getAuthUserFromRequest(context?.request);
+      const user = context?.user ?? null;
       if (!user) return null;
       return getUserProfile(user);
     },
@@ -2459,16 +1381,23 @@ const resolvers = {
         topTv: sortHomeItems(pick(topTv, "tv")),
       };
 
-      const scoredGroups = await Promise.all([
-        scoreMediaBatchForContext(homeData.featured ? [homeData.featured] : [], context),
-        scoreMediaBatchForContext(homeData.trending, context),
-        scoreMediaBatchForContext(homeData.trendingMovies, context),
-        scoreMediaBatchForContext(homeData.trendingTv, context),
-        scoreMediaBatchForContext(homeData.popularMovies, context),
-        scoreMediaBatchForContext(homeData.popularTv, context),
-        scoreMediaBatchForContext(homeData.topMovies, context),
-        scoreMediaBatchForContext(homeData.topTv, context),
-      ]);
+      const groups = [
+        homeData.featured ? [homeData.featured] : [],
+        homeData.trending,
+        homeData.trendingMovies,
+        homeData.trendingTv,
+        homeData.popularMovies,
+        homeData.popularTv,
+        homeData.topMovies,
+        homeData.topTv,
+      ];
+      const scored = await scoreMediaBatchForContext(groups.flat(), context);
+      let position = 0;
+      const scoredGroups = groups.map((group) => {
+        const result = scored.slice(position, position + group.length);
+        position += group.length;
+        return result;
+      });
 
       return {
         featured: scoredGroups[0][0] ?? null,
@@ -2482,30 +1411,7 @@ const resolvers = {
       };
     },
     discover: async (_: unknown, args: any, context: any) => {
-      const params: Record<string, string | number | boolean | undefined> = {
-        sort_by:
-          args.media === "tv" && args.sort?.startsWith?.("primary_release_date")
-            ? args.sort.replace("primary_release_date", "first_air_date")
-            : args.sort || "popularity.desc",
-        page: args.page ?? 1,
-        include_adult: false,
-      };
-
-      if (args.genre) params.with_genres = args.genre;
-      if (typeof args.genre === "string" && args.genre.startsWith("keyword:")) {
-        delete params.with_genres;
-        params.with_keywords = args.genre.slice("keyword:".length);
-      }
-      if (args.language) params.with_original_language = args.language;
-      if (args.provider) {
-        params.watch_region = "AT";
-        params.with_watch_providers = args.provider;
-        params.with_watch_monetization_types = "flatrate";
-      }
-      if (args.year) {
-        if (args.media === "movie") params.primary_release_year = args.year;
-        else params.first_air_date_year = args.year;
-      }
+      const params = discoverParameters(args);
 
       const result = await tmdb<any>(`/discover/${args.media}`, params);
       const items = (result.results ?? [])
@@ -2515,30 +1421,7 @@ const resolvers = {
     },
     discoverPage: async (_: unknown, args: any, context: any) => {
       const page = Math.max(1, Number(args.page ?? 1));
-      const params: Record<string, string | number | boolean | undefined> = {
-        sort_by:
-          args.media === "tv" && args.sort?.startsWith?.("primary_release_date")
-            ? args.sort.replace("primary_release_date", "first_air_date")
-            : args.sort || "popularity.desc",
-        page,
-        include_adult: false,
-      };
-
-      if (args.genre) params.with_genres = args.genre;
-      if (typeof args.genre === "string" && args.genre.startsWith("keyword:")) {
-        delete params.with_genres;
-        params.with_keywords = args.genre.slice("keyword:".length);
-      }
-      if (args.language) params.with_original_language = args.language;
-      if (args.provider) {
-        params.watch_region = "AT";
-        params.with_watch_providers = args.provider;
-        params.with_watch_monetization_types = "flatrate";
-      }
-      if (args.year) {
-        if (args.media === "movie") params.primary_release_year = args.year;
-        else params.first_air_date_year = args.year;
-      }
+      const params = discoverParameters(args);
 
       const result = await tmdb<any>(`/discover/${args.media}`, params);
       const items = (result.results ?? [])
@@ -2609,9 +1492,9 @@ const resolvers = {
       return result.genres ?? [];
     },
     details: async (_: unknown, args: any, context: any) => {
-      const authUser = context?.user ?? getAuthUserFromRequest(context?.request);
+      const authUser = context?.user ?? null;
       if (args.userId && authUser && args.userId !== authUser.id) {
-        throw new Error("Unauthorized.");
+        throw new PublicError("Unauthorized.");
       }
 
       const raw = await tmdb<any>(`/${args.media}/${args.id}`, {
@@ -2621,11 +1504,7 @@ const resolvers = {
       const imdbId = raw.external_ids?.imdb_id ?? raw.imdb_id ?? null;
       const externalRatings = await getOmdbRatings(imdbId);
       const providers = raw["watch/providers"]?.results ?? {};
-      const regionKey = providers[process.env.TMDB_REGION ?? "DE"]
-        ? (process.env.TMDB_REGION ?? "DE")
-        : providers.US
-          ? "US"
-          : Object.keys(providers)[0];
+      const regionKey = providers[WATCH_REGION] ? WATCH_REGION : null;
       const region = regionKey ? providers[regionKey] : null;
       const trailer = (raw.videos?.results ?? []).find(
         (video: any) =>
@@ -2760,9 +1639,9 @@ const resolvers = {
         .then((docs) => docs.map(mapRating));
     },
     seasonDetails: async (_: unknown, args: any, context: any) => {
-      const authUser = context?.user ?? getAuthUserFromRequest(context?.request);
+      const authUser = context?.user ?? null;
       if (args.userId && authUser && args.userId !== authUser.id) {
-        throw new Error("Unauthorized.");
+        throw new PublicError("Unauthorized.");
       }
 
       const watchedMap = await getWatchedEpisodeMap(authUser?.id ?? null, args.tvId);
@@ -2798,7 +1677,7 @@ const resolvers = {
       if (args.mediaType) filter.mediaType = args.mediaType;
       if (args.status) filter.status = args.status;
       const docs = await WatchProgress.find(filter).sort({ lastActivityAt: -1 });
-      return Promise.all(docs.map((doc) => enrichWatchProgress(doc, false)));
+      return enrichWatchProgressList(docs);
     },
     continueWatching: async (_: unknown, args: any, context: any) => {
       const userId = authorizeUser(context, args.userId);
@@ -2806,7 +1685,7 @@ const resolvers = {
       const docs = await WatchProgress.find({ userId, mediaType: "tv", status: "WATCHING" })
         .sort({ lastActivityAt: -1 })
         .limit(10);
-      const progress = await Promise.all(docs.map((doc) => enrichWatchProgress(doc, true)));
+      const progress = await enrichWatchProgressList(docs, true);
       return progress.filter((item) => item.nextEpisode);
     },
     tasteProfile: async (_: unknown, args: any, context: any) => {
@@ -2881,7 +1760,7 @@ const resolvers = {
           : filterArgs.sort === "newest"
             ? { createdAt: -1 }
             : { releaseDate: 1, releaseYear: 1, releaseMonth: 1, popularity: -1 };
-      const authUser = context?.user ?? getAuthUserFromRequest(context?.request);
+      const authUser = context?.user ?? null;
       const watchlistDocs =
         authUser && hasDb()
           ? await WatchlistItem.find({ userId: authUser.id }).select("tmdbId mediaType")
@@ -2909,7 +1788,7 @@ const resolvers = {
         publicationStatus: "PUBLISHED",
       };
       if (args.region) filter.region = String(args.region).toUpperCase();
-      const authUser = context?.user ?? getAuthUserFromRequest(context?.request);
+      const authUser = context?.user ?? null;
       const watchlistMatches = new Set<string>();
       if (authUser) {
         const saved = await WatchlistItem.exists({
@@ -2935,7 +1814,7 @@ const resolvers = {
       const pairs = saved.map((item: any) => ({ tmdbId: item.tmdbId, mediaType: item.mediaType }));
       const filter = {
         publicationStatus: "PUBLISHED",
-        region: String(args.region ?? "DE").toUpperCase(),
+        region: String(args.region ?? WATCH_REGION).toUpperCase(),
         $or: pairs,
       };
       const docs = await ReleaseEvent.find(filter)
@@ -2999,58 +1878,17 @@ const resolvers = {
   },
   Mutation: {
     register: async (_root: unknown, args: any, context: any) => {
-      assertDb();
-      const name = String(args.input.name ?? "").trim();
-      const email = String(args.input.email ?? "")
-        .trim()
-        .toLowerCase();
-      const password = String(args.input.password ?? "");
-
-      if (!name || !email || password.length < 6) {
-        throw new Error(
-          "Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein.",
-        );
-      }
-
-      const existing = await User.findOne({ email });
-      if (existing) {
-        throw new Error("Ein Konto mit dieser E-Mail existiert bereits.");
-      }
-
-      const passwordHash = await bcrypt.hash(password, 12);
-      const user = await User.create({
-        name,
-        email,
-        passwordHash,
-        role: isAdminEmail(email) ? "ADMIN" : "USER",
-      });
-      const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
-      setAuthCookie(context.response, safeUser);
-      return { user: await getUserProfile(safeUser) };
+      const user = await registerUser(args.input);
+      await setAuthCookie(context.response, user, context.request);
+      return { user };
     },
     login: async (_root: unknown, args: any, context: any) => {
-      assertDb();
-      const email = String(args.input.email ?? "")
-        .trim()
-        .toLowerCase();
-      const password = String(args.input.password ?? "");
-      const user = await User.findOne({ email });
-
-      if (!user) {
-        throw new Error("Konto nicht gefunden.");
-      }
-
-      const validPassword = await bcrypt.compare(password, user.passwordHash);
-      if (!validPassword) {
-        throw new Error("Falsches Passwort.");
-      }
-
-      const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
-      setAuthCookie(context.response, safeUser);
-      return { user: await getUserProfile(safeUser) };
+      const user = await loginUser(args.input);
+      await setAuthCookie(context.response, user, context.request);
+      return { user };
     },
     logout: async (_root: unknown, _args: any, context: any) => {
-      clearAuthCookie(context.response);
+      await clearAuthCookie(context.response, context.request);
       return true;
     },
     recomputeTasteProfile: async (_: unknown, args: any, context: any) => {
@@ -3113,6 +1951,7 @@ const resolvers = {
         });
       }
 
+      invalidateSocialMatches(userId);
       return mapRating(doc);
     },
     removeRating: async (_: unknown, args: any, context: any) => {
@@ -3127,6 +1966,7 @@ const resolvers = {
       if (args.mediaType === "tv" && args.seasonNumber != null) {
         await syncSeriesRatingFromSeasons(userId, args.tmdbId);
       }
+      invalidateSocialMatches(userId);
       return true;
     },
     setWatchStatus: async (_: unknown, args: any, context: any) => {
@@ -3294,14 +2134,14 @@ const resolvers = {
       assertDb();
       const admin = await requireAdmin(context);
       const existing = await ReleaseEvent.findById(args.id);
-      if (!existing) throw new Error("Release nicht gefunden.");
+      if (!existing) throw new PublicError("Release nicht gefunden.");
       const input = normalizeReleaseInput(
         { ...existing.toObject(), ...args.input },
         admin.id,
         existing,
       );
       const duplicate = await ReleaseEvent.findOne(releaseDuplicateFilter(input, args.id));
-      if (duplicate) throw new Error("Dieser Release existiert bereits.");
+      if (duplicate) throw new PublicError("Dieser Release existiert bereits.");
       const doc = await ReleaseEvent.findByIdAndUpdate(args.id, { $set: input }, { new: true });
       return mapReleaseEvent(doc);
     },
@@ -3418,15 +2258,15 @@ function normalizeReleaseInput(input: any, adminId: string, existing?: any) {
     : "ANNOUNCED";
   const dateParts = normalizeReleaseDateParts(input);
   const provider = String(input.provider ?? existing?.provider ?? "").trim();
-  const region = String(input.region ?? existing?.region ?? "DE")
+  const region = String(input.region ?? existing?.region ?? WATCH_REGION)
     .trim()
     .toUpperCase();
 
-  if (!input.tmdbId && !existing?.tmdbId) throw new Error("Titel fehlt.");
-  if (!provider) throw new Error("Streaming-Anbieter fehlt.");
-  if (!region) throw new Error("Region fehlt.");
+  if (!input.tmdbId && !existing?.tmdbId) throw new PublicError("Titel fehlt.");
+  if (!provider) throw new PublicError("Streaming-Anbieter fehlt.");
+  if (!region) throw new PublicError("Region fehlt.");
   if (dateParts.datePrecision === "EXACT" && !dateParts.releaseDate) {
-    throw new Error("Exaktes Datum fehlt.");
+    throw new PublicError("Exaktes Datum fehlt.");
   }
 
   return {
@@ -3531,121 +2371,24 @@ function buildReleaseFilter(args: any, publicOnly = true) {
   return filter;
 }
 
-const app = express();
-
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-  }),
-);
-app.use(express.json());
-app.use((request, response, next) => {
-  (request as any).res = response;
-  next();
-});
-
-app.get("/health", (_request, response) => {
-  response.json({ ok: true, mongo: hasDb() });
-});
-
-app.get("/api/me", async (request, response) => {
-  const user = getAuthUserFromRequest(request as any);
-  response.json({ user: user ? await getUserProfile(user) : null });
-});
-
-app.post("/api/register", async (request, response) => {
-  try {
-    assertDb();
-    const name = String(request.body?.name ?? "").trim();
-    const email = String(request.body?.email ?? "")
-      .trim()
-      .toLowerCase();
-    const password = String(request.body?.password ?? "");
-
-    if (!name || !email || password.length < 6) {
-      response.status(400).json({
-        error:
-          "Bitte gib einen Namen, eine gültige E-Mail und ein Passwort mit mindestens 6 Zeichen ein.",
-      });
-      return;
-    }
-
-    const existing = await User.findOne({ email });
-    if (existing) {
-      response.status(409).json({ error: "Ein Konto mit dieser E-Mail existiert bereits." });
-      return;
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({
-      name,
-      email,
-      passwordHash,
-      role: isAdminEmail(email) ? "ADMIN" : "USER",
-    });
-    const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
-    setAuthCookie(response, safeUser);
-    response.json({ user: await getUserProfile(safeUser) });
-  } catch (error: any) {
-    response.status(400).json({ error: error.message ?? "Registrierung fehlgeschlagen." });
-  }
-});
-
-app.post("/api/login", async (request, response) => {
-  try {
-    assertDb();
-    const email = String(request.body?.email ?? "")
-      .trim()
-      .toLowerCase();
-    const password = String(request.body?.password ?? "");
-    const user = await User.findOne({ email });
-
-    if (!user) {
-      response.status(401).json({ error: "Konto nicht gefunden." });
-      return;
-    }
-
-    const validPassword = await bcrypt.compare(password, user.passwordHash);
-    if (!validPassword) {
-      response.status(401).json({ error: "Falsches Passwort." });
-      return;
-    }
-
-    const safeUser = { id: user._id.toString(), name: user.name, email: user.email };
-    setAuthCookie(response, safeUser);
-    response.json({ user: await getUserProfile(safeUser) });
-  } catch (error: any) {
-    response.status(400).json({ error: error.message ?? "Login fehlgeschlagen." });
-  }
-});
-
-app.post("/api/logout", async (_request, response) => {
-  clearAuthCookie(response);
-  response.json({ ok: true });
-});
-
-const yoga = createYoga({
-  schema: createSchema({ typeDefs, resolvers }),
-  graphqlEndpoint: "/graphql",
-  context: ({ request }: { request: any }) => {
-    return {
-      request,
-      response: (request as any)?.res ?? null,
-      user: getAuthUserFromRequest(request),
-    };
-  },
-});
-
-app.use("/graphql", yoga as RequestHandler);
-
 await connectDb();
-
-app.listen(PORT, () => {
-  console.log(`GraphQL server running at http://localhost:${PORT}/graphql`);
-  if (!hasDb()) {
-    console.warn(
-      "MongoDB is not connected; watchlist and ratings will be unavailable until a valid MONGODB_URI is configured.",
-    );
-  }
+const { app, close } = await createApplication(createSchema({ typeDefs, resolvers }));
+const server = app.listen(config.PORT, config.HOST, () => {
+  console.log(`BINGE API listening on port ${config.PORT}`);
 });
+server.requestTimeout = 30000;
+server.headersTimeout = 10000;
+let stopping = false;
+const shutdown = () => {
+  if (stopping) return;
+  stopping = true;
+  const timer = setTimeout(() => process.exit(1), 10000).unref();
+  server.close(() => {
+    void Promise.all([close(), mongoose.disconnect()]).then(() => {
+      clearTimeout(timer);
+      process.exit(0);
+    });
+  });
+};
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);

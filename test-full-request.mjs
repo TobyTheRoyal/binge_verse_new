@@ -1,6 +1,6 @@
-import { GraphQLClient } from 'graphql-request';
+import { GraphQLClient } from "graphql-request";
 
-const client = new GraphQLClient('http://localhost:4000/graphql');
+const client = new GraphQLClient("http://localhost:4000/graphql");
 
 const MEDIA_FIELDS = `
   id
@@ -32,13 +32,13 @@ const query = `
 
 try {
   const data = await client.request(query);
-  console.log('Raw response received');
-  console.log('Has home:', !!data.home);
-  console.log('Featured:', data.home.featured ? data.home.featured.title : 'null');
-  console.log('Trending items:', data.home.trending.length);
+  console.log("Raw response received");
+  console.log("Has home:", !!data.home);
+  console.log("Featured:", data.home.featured ? data.home.featured.title : "null");
+  console.log("Trending items:", data.home.trending.length);
 } catch (error) {
-  console.log('Error:', error.message);
+  console.log("Error:", error.message);
   if (error.response?.errors) {
-    console.log('GraphQL errors:', error.response.errors);
+    console.log("GraphQL errors:", error.response.errors);
   }
 }

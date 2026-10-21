@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
+import { PASSWORD_MIN_LENGTH } from "../../shared/auth";
 import { useAuth } from "@/lib/auth-context";
 import { Link, useNavigate } from "@/lib/navigation";
 
@@ -126,9 +127,14 @@ export function AuthPage() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               required
-              minLength={6}
+              minLength={mode === "signup" ? PASSWORD_MIN_LENGTH : 1}
               className="w-full h-11 px-4 rounded-lg bg-background border border-border focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring"
             />
+            {mode === "signup" && (
+              <p className="text-xs text-muted-foreground">
+                Mindestens {PASSWORD_MIN_LENGTH} Zeichen, maximal 72 UTF-8-Bytes.
+              </p>
+            )}
           </div>
 
           {err && (

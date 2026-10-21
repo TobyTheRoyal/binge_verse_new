@@ -1,6 +1,7 @@
 import { graphqlClient } from "./graphql";
+import type { MediaType } from "../../shared/catalog";
 
-export type Media = "movie" | "tv";
+export type Media = MediaType;
 
 export interface MediaItem {
   id: number;
@@ -402,17 +403,24 @@ export async function searchMultiPage({
   };
 }
 
-export async function searchSuggestions({ data }: { data: { query: string; limit?: number } }) {
-  const result = await graphqlClient.request<any>(
-    `
+export async function searchSuggestions({
+  data,
+  signal,
+}: {
+  data: { query: string; limit?: number };
+  signal?: AbortSignal;
+}) {
+  const result = await graphqlClient.request<any>({
+    document: `
       query SearchSuggestions($query: String!, $limit: Int) {
         searchSuggestions(query: $query, limit: $limit) { ${MEDIA_FIELDS} }
       }
     `,
-    data,
-  );
+    variables: data,
+    signal,
+  });
 
-  const items = result.searchSuggestions.map(fromMedia);
+  const items: MediaItem[] = result.searchSuggestions.map(fromMedia);
   return { results: items, total: items.length };
 }
 

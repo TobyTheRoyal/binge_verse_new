@@ -1,15 +1,29 @@
+import { lazy, Suspense } from "react";
+import { Loader2 } from "lucide-react";
 import { Navbar } from "./components/Navbar";
 import { BrandLogo } from "./components/BrandLogo";
+import { RouteBoundary } from "./components/RouteBoundary";
 import { useNavigation, Link } from "./lib/navigation";
-import { AuthPage } from "./routes/auth";
-import { AdminPage } from "./routes/admin";
-import { BrowsePage } from "./routes/browse";
-import { CalendarPage } from "./routes/calendar";
-import { HistoryPage } from "./routes/history";
-import { HomePage } from "./routes";
-import { TasteDnaPage } from "./routes/taste-dna";
-import { DetailPage } from "./routes/title.$type.$id";
-import { WatchlistPage } from "./routes/watchlist";
+
+const AuthPage = lazy(() => import("./routes/auth").then((m) => ({ default: m.AuthPage })));
+const AdminPage = lazy(() => import("./routes/admin").then((m) => ({ default: m.AdminPage })));
+const BrowsePage = lazy(() => import("./routes/browse").then((m) => ({ default: m.BrowsePage })));
+const CalendarPage = lazy(() =>
+  import("./routes/calendar").then((m) => ({ default: m.CalendarPage })),
+);
+const HistoryPage = lazy(() =>
+  import("./routes/history").then((m) => ({ default: m.HistoryPage })),
+);
+const HomePage = lazy(() => import("./routes").then((m) => ({ default: m.HomePage })));
+const TasteDnaPage = lazy(() =>
+  import("./routes/taste-dna").then((m) => ({ default: m.TasteDnaPage })),
+);
+const DetailPage = lazy(() =>
+  import("./routes/title.$type.$id").then((m) => ({ default: m.DetailPage })),
+);
+const WatchlistPage = lazy(() =>
+  import("./routes/watchlist").then((m) => ({ default: m.WatchlistPage })),
+);
 
 export function App() {
   const { pathname } = useNavigation();
@@ -37,7 +51,21 @@ export function App() {
       </a>
       <Navbar />
       <main id="main-content" className="flex-1">
-        {page}
+        <RouteBoundary key={pathname}>
+          <Suspense
+            fallback={
+              <div
+                role="status"
+                aria-label="Seite wird geladen"
+                className="grid min-h-64 place-items-center text-primary"
+              >
+                <Loader2 className="size-6 animate-spin" aria-hidden="true" />
+              </div>
+            }
+          >
+            {page}
+          </Suspense>
+        </RouteBoundary>
       </main>
       <footer className="mt-12 border-t border-border bg-surface/30">
         <div className="mx-auto flex max-w-7xl flex-col gap-8 px-4 py-10 sm:px-6 md:flex-row md:items-center md:justify-between">

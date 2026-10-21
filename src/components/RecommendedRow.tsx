@@ -36,5 +36,11 @@ export function RecommendedRow() {
   }, [user, seed]);
 
   if (!user || !seed || recs.length === 0) return null;
-  return <MediaRow title="Empfohlen für dich" subtitle={`Weil du "${seed.title}" mochtest`} items={recs} />;
+  return (
+    <MediaRow
+      title="Empfohlen für dich"
+      subtitle={`Weil du "${seed.title}" mochtest`}
+      items={recs}
+    />
+  );
 }

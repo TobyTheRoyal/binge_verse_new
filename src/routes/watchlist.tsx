@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Bookmark, Trash2, Star } from "lucide-react";
-import { posterUrl } from "@/components/MediaCard";
+import { posterUrl } from "@/lib/media-assets";
 import { useAuth } from "@/lib/auth-context";
 import {
   useWatchlist,

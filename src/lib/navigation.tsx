@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type AnchorHTMLAttributes,
+  type ReactNode,
+} from "react";
 
 type NavigateOptions = {
   replace?: boolean;
@@ -59,7 +67,11 @@ export function useSearchParams() {
   return useNavigation().searchParams;
 }
 
-export function Link({ href, onClick, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) {
+export function Link({
+  href,
+  onClick,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) {
   const navigate = useNavigate();
 
   return (

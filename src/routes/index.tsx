@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Clapperboard, Star, Loader2, TrendingUp } from "lucide-react";
-import { TMDB_IMG, posterUrl } from "@/components/MediaCard";
+import { TMDB_IMG, posterUrl } from "@/lib/media-assets";
 import { MediaRow } from "@/components/MediaRow";
 import { MatchScore } from "@/components/MatchScore";
 import { RecommendedRow } from "@/components/RecommendedRow";
@@ -14,6 +14,7 @@ import {
 } from "@/lib/release-calendar";
 import { useAuth } from "@/lib/auth-context";
 import { getTasteDna } from "@/lib/taste-dna";
+import { WATCH_REGION } from "../../shared/catalog";
 
 function ContinueWatchingRow() {
   const { items, loading } = useContinueWatching();
@@ -111,12 +112,12 @@ function ComingSoonStreamingRow() {
   const { user } = useAuth();
   const { data } = useQuery({
     queryKey: ["home-release-events"],
-    queryFn: () => getReleaseEvents({ region: "AT", limit: 16 }),
+    queryFn: () => getReleaseEvents({ region: WATCH_REGION, limit: 16 }),
   });
   const { data: watchlistReleases } = useQuery({
     queryKey: ["home-watchlist-release-events", user?.id],
     enabled: Boolean(user),
-    queryFn: () => getWatchlistReleaseEvents({ userId: user!.id, region: "AT" }),
+    queryFn: () => getWatchlistReleaseEvents({ userId: user!.id, region: WATCH_REGION }),
   });
 
   const items = data?.items ?? [];

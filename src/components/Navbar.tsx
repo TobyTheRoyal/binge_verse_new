@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { Link, useNavigate, useNavigation } from "@/lib/navigation";
-import { searchSuggestions, type MediaItem } from "@/lib/tmdb.functions";
-import { posterUrl } from "@/components/MediaCard";
+import { useMediaSuggestions } from "@/hooks/use-media-suggestions";
+import { posterUrl } from "@/lib/media-assets";
 import { BrandLogo } from "@/components/BrandLogo";
 import {
   Search,
@@ -24,38 +24,16 @@ export function Navbar() {
   const navigate = useNavigate();
   const { pathname } = useNavigation();
   const [q, setQ] = useState("");
-  const [suggestions, setSuggestions] = useState<MediaItem[]>([]);
+  const suggestions = useMediaSuggestions(q);
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setMenuOpen(false);
     setSearchOpen(false);
   }, [pathname]);
-
-  useEffect(() => {
-    const query = q.trim();
-    if (query.length < 2) {
-      setSuggestions([]);
-      return;
-    }
-
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      try {
-        const result = await searchSuggestions({ data: { query, limit: 6 } });
-        if (!cancelled) setSuggestions(result.results);
-      } catch {
-        if (!cancelled) setSuggestions([]);
-      }
-    }, 150);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [q]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -144,7 +122,6 @@ export function Navbar() {
                       onClick={() => {
                         setQ("");
                         setSearchOpen(false);
-                        setSuggestions([]);
                         navigate(`/title/${item.media_type}/${item.id}`);
                       }}
                       className="flex w-full items-center gap-3 border-b border-border px-3 py-2.5 text-left text-sm last:border-b-0 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-offset-[-2px]"
@@ -191,8 +168,13 @@ export function Navbar() {
               </div>
               <button
                 onClick={async () => {
-                  await signOut();
-                  navigate("/auth", { replace: true });
+                  try {
+                    setAuthError(null);
+                    await signOut();
+                    navigate("/auth", { replace: true });
+                  } catch {
+                    setAuthError("Abmelden fehlgeschlagen. Bitte versuche es erneut.");
+                  }
                 }}
                 title="Abmelden"
                 aria-label="Abmelden"
@@ -243,6 +225,14 @@ export function Navbar() {
             </Link>
           ))}
         </nav>
+      )}
+      {authError && (
+        <div
+          role="alert"
+          className="border-t border-destructive/30 bg-background px-4 py-2 text-sm text-destructive"
+        >
+          {authError}
+        </div>
       )}
     </header>
   );

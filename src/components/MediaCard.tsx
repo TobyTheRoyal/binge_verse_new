@@ -1,17 +1,8 @@
+import { posterUrl } from "@/lib/media-assets";
 import { Star } from "lucide-react";
 import type { MediaItem } from "@/lib/tmdb.functions";
 import { Link } from "@/lib/navigation";
 import { MatchScore } from "./MatchScore";
-
-export const TMDB_IMG = "https://image.tmdb.org/t/p";
-
-export function posterUrl(
-  path: string | null,
-  size: "w92" | "w185" | "w342" | "w500" | "original" = "w342",
-) {
-  if (!path) return null;
-  return `${TMDB_IMG}/${size}${path}`;
-}
 
 export function MediaCard({ item, priority }: { item: MediaItem; priority?: boolean }) {
   const year = item.release_date ? new Date(item.release_date).getFullYear() : null;

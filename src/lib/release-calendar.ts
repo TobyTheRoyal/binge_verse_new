@@ -1,17 +1,17 @@
 import type { MatchScore, Media, MediaItem } from "./tmdb.functions";
 
-export type ReleaseType =
-  | "CINEMA_RELEASE"
-  | "MOVIE_PREMIERE"
-  | "MOVIE_CATALOG"
-  | "TV_SERIES_PREMIERE"
-  | "TV_SEASON"
-  | "TV_EPISODE"
-  | "TV_CATALOG";
-export type PublicationStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED";
-export type ConfirmationStatus =
-  "ANNOUNCED" | "CONFIRMED" | "UNCONFIRMED" | "POSTPONED" | "CANCELLED";
-export type DatePrecision = "EXACT" | "MONTH" | "QUARTER" | "YEAR" | "UNKNOWN";
+export type {
+  ReleaseType,
+  PublicationStatus,
+  ConfirmationStatus,
+  DatePrecision,
+} from "../../shared/catalog";
+import type {
+  ReleaseType,
+  PublicationStatus,
+  ConfirmationStatus,
+  DatePrecision,
+} from "../../shared/catalog";
 
 export interface ReleaseEvent {
   id: string;

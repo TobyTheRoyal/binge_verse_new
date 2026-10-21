@@ -1,3 +1,8 @@
+import {
+  CALENDAR_PROVIDERS as PROVIDERS,
+  WATCH_REGION,
+  RELEASE_TYPE_LABELS,
+} from "../../shared/catalog";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -9,7 +14,7 @@ import {
   List,
   Sparkles,
 } from "lucide-react";
-import { posterUrl } from "@/components/MediaCard";
+import { posterUrl } from "@/lib/media-assets";
 import { MatchScore } from "@/components/MatchScore";
 import { useAuth } from "@/lib/auth-context";
 import { Link } from "@/lib/navigation";
@@ -21,26 +26,7 @@ import {
   type ReleaseType,
 } from "@/lib/release-calendar";
 
-const PROVIDERS = [
-  "Netflix",
-  "Prime Video",
-  "Disney+",
-  "Apple TV+",
-  "HBO Max",
-  "Sky",
-  "Paramount+",
-  "Kino",
-];
-const REGIONS = ["AT"];
-const RELEASE_TYPE_LABELS: Record<ReleaseType, string> = {
-  CINEMA_RELEASE: "Kinostart",
-  MOVIE_PREMIERE: "Filmpremiere",
-  MOVIE_CATALOG: "Film im Katalog",
-  TV_SERIES_PREMIERE: "Serienpremiere",
-  TV_SEASON: "Neue Staffel",
-  TV_EPISODE: "Neue Episode",
-  TV_CATALOG: "Serie im Katalog",
-};
+const REGIONS = [WATCH_REGION];
 
 function toDateKey(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -148,7 +134,7 @@ export function CalendarPage() {
   const [view, setView] = useState<"month" | "week" | "list" | "soon">("month");
   const [month, setMonth] = useState(today.getMonth());
   const [year, setYear] = useState(today.getFullYear());
-  const [region, setRegion] = useState("AT");
+  const [region, setRegion] = useState<string>(WATCH_REGION);
   const [providers, setProviders] = useState<string[]>([]);
   const [mediaType, setMediaType] = useState<"all" | "movie" | "tv">("all");
   const [selectedDate, setSelectedDate] = useState(toDateKey(today));

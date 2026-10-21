@@ -1,7 +1,16 @@
+import {
+  CALENDAR_PROVIDERS as PROVIDERS,
+  WATCH_REGION,
+  RELEASE_TYPES,
+  CONFIRMATION_STATUSES,
+  PUBLICATION_STATUSES,
+  DATE_PRECISIONS,
+  RELEASE_TYPE_LABELS as releaseTypeLabel,
+} from "../../shared/catalog";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarPlus, Copy, Lock, Plus, Search, Trash2, UploadCloud } from "lucide-react";
-import { posterUrl } from "@/components/MediaCard";
+import { posterUrl } from "@/lib/media-assets";
 import { useAuth } from "@/lib/auth-context";
 import { Link } from "@/lib/navigation";
 import { searchSuggestions, type MediaItem } from "@/lib/tmdb.functions";
@@ -23,50 +32,12 @@ import {
   type ReleaseType,
 } from "@/lib/release-calendar";
 
-const PROVIDERS = [
-  "Netflix",
-  "Prime Video",
-  "Disney+",
-  "Apple TV+",
-  "HBO Max",
-  "Sky",
-  "Paramount+",
-  "Kino",
-];
-const REGIONS = ["AT"];
-const RELEASE_TYPES: ReleaseType[] = [
-  "CINEMA_RELEASE",
-  "MOVIE_PREMIERE",
-  "MOVIE_CATALOG",
-  "TV_SERIES_PREMIERE",
-  "TV_SEASON",
-  "TV_EPISODE",
-  "TV_CATALOG",
-];
-const CONFIRMATION_STATUSES: ConfirmationStatus[] = [
-  "ANNOUNCED",
-  "CONFIRMED",
-  "UNCONFIRMED",
-  "POSTPONED",
-  "CANCELLED",
-];
-const PUBLICATION_STATUSES: PublicationStatus[] = ["DRAFT", "PUBLISHED", "ARCHIVED"];
-const DATE_PRECISIONS: DatePrecision[] = ["EXACT", "MONTH", "QUARTER", "YEAR", "UNKNOWN"];
-
-const releaseTypeLabel: Record<ReleaseType, string> = {
-  CINEMA_RELEASE: "Kinostart",
-  MOVIE_PREMIERE: "Filmpremiere",
-  MOVIE_CATALOG: "Film im Katalog",
-  TV_SERIES_PREMIERE: "Serienpremiere",
-  TV_SEASON: "Neue Staffel",
-  TV_EPISODE: "Neue Episode",
-  TV_CATALOG: "Serie im Katalog",
-};
+const REGIONS = [WATCH_REGION];
 
 function emptyDraft() {
   return {
     provider: "Netflix",
-    region: "AT",
+    region: WATCH_REGION,
     releaseDate: new Date().toISOString().slice(0, 10),
     datePrecision: "EXACT" as DatePrecision,
     releaseYear: new Date().getFullYear(),
