@@ -345,6 +345,23 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                   <summary className="cursor-pointer text-sm font-bold">
                     Warum dieser Match?
                   </summary>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    {typeof d.match_score.tasteScore === "number" && (
+                      <span className="rounded-full border border-border bg-background/80 px-2.5 py-1">
+                        TasteDNA {d.match_score.tasteScore}%
+                      </span>
+                    )}
+                    {typeof d.match_score.similarUserScore === "number" && (
+                      <span className="rounded-full border border-border bg-background/80 px-2.5 py-1">
+                        Ähnliche User {d.match_score.similarUserScore}%
+                      </span>
+                    )}
+                    {typeof d.match_score.communityScore === "number" && (
+                      <span className="rounded-full border border-border bg-background/80 px-2.5 py-1">
+                        Community {d.match_score.communityScore}%
+                      </span>
+                    )}
+                  </div>
                   <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
                     {d.match_score.reasons.map((reason) => (
                       <li key={reason}>{reason}</li>

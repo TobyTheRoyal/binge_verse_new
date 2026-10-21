@@ -22,6 +22,11 @@ export interface MatchScore {
   label: string;
   color: string;
   confidence: number;
+  tasteScore?: number | null;
+  communityScore?: number | null;
+  communityRatingCount?: number;
+  similarUserScore?: number | null;
+  similarUserCount?: number;
   reasons: string[];
   insufficientData: boolean;
 }
@@ -106,6 +111,11 @@ const MEDIA_FIELDS = `
     label
     color
     confidence
+    tasteScore
+    communityScore
+    communityRatingCount
+    similarUserScore
+    similarUserCount
     reasons
     insufficientData
   }
@@ -554,6 +564,11 @@ export async function getDetails({
             label
             color
             confidence
+            tasteScore
+            communityScore
+            communityRatingCount
+            similarUserScore
+            similarUserCount
             reasons
             insufficientData
           }

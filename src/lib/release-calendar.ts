@@ -168,6 +168,11 @@ const releaseFields = `
     label
     color
     confidence
+    tasteScore
+    communityScore
+    communityRatingCount
+    similarUserScore
+    similarUserCount
     reasons
     insufficientData
   }

@@ -336,8 +336,25 @@ type MatchScoreResult = {
   label: string;
   color: string;
   confidence: number;
+  tasteScore: number | null;
+  communityScore: number | null;
+  communityRatingCount: number;
+  similarUserScore: number | null;
+  similarUserCount: number;
   reasons: string[];
   insufficientData: boolean;
+};
+
+type MatchSocialSignal = {
+  communityScore: number | null;
+  communityRatingCount: number;
+  similarUserScore: number | null;
+  similarUserCount: number;
+};
+
+type MatchSocialContext = {
+  signals: Map<string, MatchSocialSignal>;
+  similarUserCount: number;
 };
 
 const GENRE_NAMES: Record<number, string> = {
@@ -664,6 +681,172 @@ async function buildTasteProfile(userId: string, force = false): Promise<BuiltTa
   return profile;
 }
 
+function matchItemKey(mediaType: MediaType, tmdbId: number) {
+  return `${mediaType}:${tmdbId}`;
+}
+
+function getMatchItemKey(item: {
+  id?: number;
+  tmdbId?: number;
+  mediaType?: MediaType;
+  media_type?: MediaType;
+}) {
+  const mediaType = item.mediaType ?? item.media_type;
+  const tmdbId = item.tmdbId ?? item.id;
+  return mediaType && Number.isFinite(Number(tmdbId))
+    ? matchItemKey(mediaType, Number(tmdbId))
+    : null;
+}
+
+function ratingAverageToSocialScore(average: number, count: number, fullWeightAt: number) {
+  const rawScore = clamp(average * 10, 0, 100);
+  const confidence = clamp(count / fullWeightAt, 0.25, 1);
+  return Math.round(clamp(50 + (rawScore - 50) * confidence, 0, 100));
+}
+
+async function buildMatchSocialContext(
+  userId: string,
+  items: Array<{ id?: number; tmdbId?: number; mediaType?: MediaType; media_type?: MediaType }>,
+): Promise<MatchSocialContext> {
+  const uniqueItems = [
+    ...new Map(
+      items
+        .map((item) => {
+          const mediaType = item.mediaType ?? item.media_type;
+          const tmdbId = Number(item.tmdbId ?? item.id);
+          return mediaType && Number.isFinite(tmdbId)
+            ? [matchItemKey(mediaType, tmdbId), { mediaType, tmdbId }]
+            : null;
+        })
+        .filter(Boolean) as Array<[string, { mediaType: MediaType; tmdbId: number }]>,
+    ).values(),
+  ];
+
+  if (!uniqueItems.length) return { signals: new Map(), similarUserCount: 0 };
+
+  const itemFilter = uniqueItems.map((item) => ({
+    tmdbId: item.tmdbId,
+    mediaType: item.mediaType,
+  }));
+  const currentRatings = await Rating.find({ userId, seasonNumber: null })
+    .select("tmdbId mediaType rating")
+    .lean();
+  const currentRatingMap = new Map(
+    currentRatings.map((rating: any) => [
+      matchItemKey(rating.mediaType, Number(rating.tmdbId)),
+      Number(rating.rating ?? 0),
+    ]),
+  );
+
+  const communityRatings = await Rating.find({
+    seasonNumber: null,
+    userId: { $ne: userId },
+    $or: itemFilter,
+  })
+    .select("userId tmdbId mediaType rating")
+    .lean();
+
+  const communityStats = new Map<string, { total: number; count: number }>();
+  for (const rating of communityRatings) {
+    const key = matchItemKey(rating.mediaType, Number(rating.tmdbId));
+    const current = communityStats.get(key) ?? { total: 0, count: 0 };
+    current.total += Number(rating.rating ?? 0);
+    current.count += 1;
+    communityStats.set(key, current);
+  }
+
+  const candidateSimilarity = new Map<string, { diffTotal: number; overlap: number }>();
+  if (currentRatings.length >= 3) {
+    const overlapFilter = currentRatings.map((rating: any) => ({
+      tmdbId: rating.tmdbId,
+      mediaType: rating.mediaType,
+    }));
+    const overlapRatings = await Rating.find({
+      seasonNumber: null,
+      userId: { $ne: userId },
+      $or: overlapFilter,
+    })
+      .select("userId tmdbId mediaType rating")
+      .lean();
+
+    for (const rating of overlapRatings) {
+      const key = matchItemKey(rating.mediaType, Number(rating.tmdbId));
+      const ownRating = currentRatingMap.get(key);
+      if (ownRating == null) continue;
+      const userKey = String(rating.userId);
+      const current = candidateSimilarity.get(userKey) ?? { diffTotal: 0, overlap: 0 };
+      current.diffTotal += Math.abs(ownRating - Number(rating.rating ?? 0));
+      current.overlap += 1;
+      candidateSimilarity.set(userKey, current);
+    }
+  }
+
+  const similarUsers = [...candidateSimilarity.entries()]
+    .map(([candidateUserId, stats]) => {
+      const averageDiff = stats.diffTotal / Math.max(stats.overlap, 1);
+      const agreement = clamp(1 - averageDiff / 10, 0, 1);
+      const overlapConfidence = clamp(stats.overlap / 5, 0.45, 1);
+      return {
+        userId: candidateUserId,
+        similarity: agreement * overlapConfidence,
+        overlap: stats.overlap,
+      };
+    })
+    .filter((item) => item.overlap >= 2 && item.similarity >= 0.42)
+    .sort((a, b) => b.similarity - a.similarity || b.overlap - a.overlap)
+    .slice(0, 25);
+
+  const similarStats = new Map<string, { weightedTotal: number; weight: number; count: number }>();
+  if (similarUsers.length) {
+    const similarityByUser = new Map(similarUsers.map((user) => [user.userId, user.similarity]));
+    const similarRatings = await Rating.find({
+      seasonNumber: null,
+      userId: { $in: similarUsers.map((user) => user.userId) },
+      $or: itemFilter,
+    })
+      .select("userId tmdbId mediaType rating")
+      .lean();
+
+    for (const rating of similarRatings) {
+      const similarity = similarityByUser.get(String(rating.userId));
+      if (!similarity) continue;
+      const key = matchItemKey(rating.mediaType, Number(rating.tmdbId));
+      const current = similarStats.get(key) ?? { weightedTotal: 0, weight: 0, count: 0 };
+      current.weightedTotal += Number(rating.rating ?? 0) * similarity;
+      current.weight += similarity;
+      current.count += 1;
+      similarStats.set(key, current);
+    }
+  }
+
+  const signals = new Map<string, MatchSocialSignal>();
+  for (const item of uniqueItems) {
+    const key = matchItemKey(item.mediaType, item.tmdbId);
+    const community = communityStats.get(key);
+    const similar = similarStats.get(key);
+    signals.set(key, {
+      communityScore: community
+        ? ratingAverageToSocialScore(
+            community.total / Math.max(community.count, 1),
+            community.count,
+            8,
+          )
+        : null,
+      communityRatingCount: community?.count ?? 0,
+      similarUserScore: similar
+        ? ratingAverageToSocialScore(
+            similar.weightedTotal / Math.max(similar.weight, 0.01),
+            similar.count,
+            5,
+          )
+        : null,
+      similarUserCount: similar?.count ?? 0,
+    });
+  }
+
+  return { signals, similarUserCount: similarUsers.length };
+}
+
 function scoreFromProfile(
   profile: BuiltTasteProfile,
   item: {
@@ -679,16 +862,22 @@ function scoreFromProfile(
     vote_average?: number;
     popularity?: number;
     overview?: string;
-    cast?: { id: number; name: string }[];
-    directors?: { id: number; name: string }[];
+    cast?: { id: number | string; name: string }[];
+    directors?: { id: number | string; name: string }[];
     storyThemes?: { id: string; name: string }[];
   },
+  socialSignal?: MatchSocialSignal | null,
 ): MatchScoreResult {
   if (profile.ratingCount < 3 || profile.confidence < 20) {
     return {
       score: null,
       ...matchScoreMeta(null),
       confidence: profile.confidence,
+      tasteScore: null,
+      communityScore: socialSignal?.communityScore ?? null,
+      communityRatingCount: socialSignal?.communityRatingCount ?? 0,
+      similarUserScore: null,
+      similarUserCount: 0,
       reasons: ["Bewerte mindestens 3 Titel, um personalisierte TasteMatch-Scores freizuschalten."],
       insufficientData: true,
     };
@@ -740,16 +929,50 @@ function scoreFromProfile(
   const mediaType = item.mediaType ?? item.media_type;
   const mediaTypeBonus = mediaType && mediaType === profile.favoriteMediaType ? 3 : 0;
 
+  const baseTasteScore = clamp(
+    genreScore * 0.42 +
+      storyScore * 0.18 +
+      actorScore * 0.12 +
+      directorScore * 0.1 +
+      qualityScore * 0.12 +
+      popularityScore * 0.06 +
+      mediaTypeBonus -
+      excludedPenalty,
+    0,
+    100,
+  );
+
+  const strongestGenre = Math.max(50, ...matchedGenres.map((pref) => pref.score));
+  const strongestStory = Math.max(50, ...matchedStories.map((pref) => pref.score));
+  const hasStrongActor = matchedActors.some((pref) => pref.score >= 75);
+  const hasStrongDirector = matchedDirectors.some((pref) => pref.score >= 75);
+  const strongSignalBoost =
+    (strongestGenre >= 80 ? 7 : strongestGenre >= 68 ? 4 : 0) +
+    (strongestStory >= 78 ? 6 : strongestStory >= 66 ? 3 : 0) +
+    (hasStrongActor ? 3 : 0) +
+    (hasStrongDirector ? 3 : 0);
+  const spread = 1.18 + clamp(profile.ratingCount / 12, 0, 1) * 0.32;
+  const confidenceCap = profile.ratingCount < 6 ? 82 : profile.ratingCount < 10 ? 90 : 97;
+  const tasteScore = Math.round(
+    clamp(50 + (baseTasteScore - 50) * spread + strongSignalBoost, 0, confidenceCap),
+  );
+
+  const communityScore = socialSignal?.communityScore ?? null;
+  const similarUserScore = socialSignal?.similarUserScore ?? null;
+  const similarWeight =
+    similarUserScore == null ? 0 : 0.25 * clamp((socialSignal?.similarUserCount ?? 0) / 5, 0.35, 1);
+  const communityWeight =
+    communityScore == null
+      ? 0
+      : 0.1 * clamp((socialSignal?.communityRatingCount ?? 0) / 8, 0.25, 1);
+  const tasteWeight = Math.max(0.55, 1 - similarWeight - communityWeight);
+  const weightTotal = tasteWeight + similarWeight + communityWeight;
   const score = Math.round(
     clamp(
-      genreScore * 0.42 +
-        storyScore * 0.18 +
-        actorScore * 0.12 +
-        directorScore * 0.1 +
-        qualityScore * 0.12 +
-        popularityScore * 0.06 +
-        mediaTypeBonus -
-        excludedPenalty,
+      (tasteScore * tasteWeight +
+        (similarUserScore ?? 50) * similarWeight +
+        (communityScore ?? 50) * communityWeight) /
+        Math.max(weightTotal, 0.01),
       0,
       100,
     ),
@@ -773,6 +996,22 @@ function scoreFromProfile(
       .slice(0, 1)
       .map((pref) => `Der kreative Stil von ${pref.name} passt zu deinen Bewertungen.`),
   ];
+  if (
+    similarUserScore != null &&
+    similarUserScore >= 72 &&
+    (socialSignal?.similarUserCount ?? 0) > 0
+  ) {
+    reasons.push("User mit ähnlichem Geschmack bewerten diesen Titel überdurchschnittlich gut.");
+  }
+  if (
+    communityScore != null &&
+    communityScore >= 72 &&
+    (socialSignal?.communityRatingCount ?? 0) >= 2
+  ) {
+    reasons.push(
+      `Die BingeVerse-Community bewertet diesen Titel stark (${socialSignal?.communityRatingCount} Bewertungen).`,
+    );
+  }
   if (!reasons.length && qualityScore >= 75) {
     reasons.push(
       "Die globale Qualität ist stark, aber dein persönliches Profil liefert noch wenige direkte Signale.",
@@ -783,6 +1022,11 @@ function scoreFromProfile(
     score,
     ...meta,
     confidence: profile.confidence,
+    tasteScore,
+    communityScore,
+    communityRatingCount: socialSignal?.communityRatingCount ?? 0,
+    similarUserScore,
+    similarUserCount: socialSignal?.similarUserCount ?? 0,
     reasons: reasons.slice(0, 4),
     insufficientData: false,
   };
@@ -791,24 +1035,45 @@ function scoreFromProfile(
 async function scoreMediaBatchForContext(items: any[], context: any) {
   const user = context?.user ?? getAuthUserFromRequest(context?.request);
   if (!user || !hasDb() || !items.length) return items;
-  const profile = await buildTasteProfile(user.id);
-  return items.map((item) => ({ ...item, matchScore: scoreFromProfile(profile, item) }));
+  const [profile, socialContext] = await Promise.all([
+    buildTasteProfile(user.id),
+    buildMatchSocialContext(user.id, items),
+  ]);
+  return items.map((item) => ({
+    ...item,
+    matchScore: scoreFromProfile(
+      profile,
+      item,
+      socialContext.signals.get(getMatchItemKey(item) ?? ""),
+    ),
+  }));
 }
 
 async function scoreReleaseEventsForContext(items: any[], context: any) {
   const user = context?.user ?? getAuthUserFromRequest(context?.request);
   if (!user || !hasDb() || !items.length) return items;
-  const profile = await buildTasteProfile(user.id);
+  const scoreItems = items.map((item) => ({
+    id: item.tmdbId,
+    mediaType: item.mediaType,
+  }));
+  const [profile, socialContext] = await Promise.all([
+    buildTasteProfile(user.id),
+    buildMatchSocialContext(user.id, scoreItems),
+  ]);
   return items.map((item) => ({
     ...item,
-    matchScore: scoreFromProfile(profile, {
-      id: item.tmdbId,
-      mediaType: item.mediaType,
-      title: item.title,
-      genreIds: item.genreIds,
-      voteAverage: item.voteAverage,
-      popularity: item.popularity,
-    }),
+    matchScore: scoreFromProfile(
+      profile,
+      {
+        id: item.tmdbId,
+        mediaType: item.mediaType,
+        title: item.title,
+        genreIds: item.genreIds,
+        voteAverage: item.voteAverage,
+        popularity: item.popularity,
+      },
+      socialContext.signals.get(matchItemKey(item.mediaType, Number(item.tmdbId))),
+    ),
   }));
 }
 
@@ -1242,8 +1507,16 @@ async function personalizedRecommendationSections(
     );
   }
 
+  const socialContext = await buildMatchSocialContext(userId, candidates);
   const scored = candidates
-    .map((item) => ({ ...item, matchScore: scoreFromProfile(profile, item) }))
+    .map((item) => ({
+      ...item,
+      matchScore: scoreFromProfile(
+        profile,
+        item,
+        socialContext.signals.get(getMatchItemKey(item) ?? ""),
+      ),
+    }))
     .filter((item) => item.matchScore.score != null)
     .sort((a, b) => (b.matchScore.score ?? 0) - (a.matchScore.score ?? 0))
     .slice(0, Math.min(Math.max(limit, 1), 24));
@@ -1629,6 +1902,11 @@ const typeDefs = /* GraphQL */ `
     label: String!
     color: String!
     confidence: Int!
+    tasteScore: Int
+    communityScore: Int
+    communityRatingCount: Int!
+    similarUserScore: Int
+    similarUserCount: Int!
     reasons: [String!]!
     insufficientData: Boolean!
   }
@@ -2371,31 +2649,41 @@ const resolvers = {
         myRating = rating?.rating ?? null;
         inWatchlist = Boolean(saved);
       }
-      const detailMatchScore =
-        effectiveUserId && hasDb()
-          ? scoreFromProfile(await buildTasteProfile(effectiveUserId), {
-              id: raw.id,
-              mediaType: args.media,
-              title: raw.title ?? raw.name ?? "Untitled",
-              overview: raw.overview ?? "",
-              genres: raw.genres ?? [],
-              voteAverage: raw.vote_average ?? 0,
-              popularity: raw.popularity ?? 0,
-              cast: (raw.credits?.cast ?? []).slice(0, 8).map((member: any) => ({
+      const detailScoreItem = {
+        id: raw.id,
+        mediaType: args.media,
+        title: raw.title ?? raw.name ?? "Untitled",
+        overview: raw.overview ?? "",
+        genres: raw.genres ?? [],
+        voteAverage: raw.vote_average ?? 0,
+        popularity: raw.popularity ?? 0,
+        cast: (raw.credits?.cast ?? []).slice(0, 8).map((member: any) => ({
+          id: String(member.id),
+          name: member.name,
+        })),
+        directors:
+          args.media === "movie"
+            ? (raw.credits?.crew ?? [])
+                .filter((member: any) => member.job === "Director")
+                .map((member: any) => ({ id: String(member.id), name: member.name }))
+            : (raw.created_by ?? []).map((member: any) => ({
                 id: String(member.id),
                 name: member.name,
               })),
-              directors:
-                args.media === "movie"
-                  ? (raw.credits?.crew ?? [])
-                      .filter((member: any) => member.job === "Director")
-                      .map((member: any) => ({ id: String(member.id), name: member.name }))
-                  : (raw.created_by ?? []).map((member: any) => ({
-                      id: String(member.id),
-                      name: member.name,
-                    })),
-              storyThemes: extractStoryThemes(raw),
-            })
+        storyThemes: extractStoryThemes(raw),
+      };
+      const detailMatchScore =
+        effectiveUserId && hasDb()
+          ? await Promise.all([
+              buildTasteProfile(effectiveUserId),
+              buildMatchSocialContext(effectiveUserId, [detailScoreItem]),
+            ]).then(([profile, socialContext]) =>
+              scoreFromProfile(
+                profile,
+                detailScoreItem,
+                socialContext.signals.get(matchItemKey(args.media, Number(raw.id))),
+              ),
+            )
           : null;
       const recommendationItems = (raw.recommendations?.results ?? [])
         .map((item: TmdbMedia) => normalizeMedia(item, args.media))
@@ -2535,23 +2823,32 @@ const resolvers = {
     },
     matchScores: async (_: unknown, args: any, context: any) => {
       const userId = authorizeUser(context, args.userId ?? null);
-      const profile = await buildTasteProfile(userId);
-      return (args.items ?? []).map((item: any) =>
-        scoreFromProfile(profile, {
-          id: item.tmdbId,
-          mediaType: item.mediaType,
-          title: item.title ?? "",
-          overview: item.overview ?? "",
-          voteAverage: item.voteAverage ?? 0,
-          popularity: item.popularity ?? 0,
-          genreIds: item.genreIds ?? [],
-        }),
+      const scoreItems = (args.items ?? []).map((item: any) => ({
+        id: item.tmdbId,
+        mediaType: item.mediaType,
+        title: item.title ?? "",
+        overview: item.overview ?? "",
+        voteAverage: item.voteAverage ?? 0,
+        popularity: item.popularity ?? 0,
+        genreIds: item.genreIds ?? [],
+      }));
+      const [profile, socialContext] = await Promise.all([
+        buildTasteProfile(userId),
+        buildMatchSocialContext(userId, scoreItems),
+      ]);
+      return scoreItems.map((item: any) =>
+        scoreFromProfile(
+          profile,
+          {
+            ...item,
+          },
+          socialContext.signals.get(getMatchItemKey(item) ?? ""),
+        ),
       );
     },
     matchExplanation: async (_: unknown, args: any, context: any) => {
       const userId = authorizeUser(context, args.userId ?? null);
-      const profile = await buildTasteProfile(userId);
-      return scoreFromProfile(profile, {
+      const scoreItem = {
         id: args.item.tmdbId,
         mediaType: args.item.mediaType,
         title: args.item.title ?? "",
@@ -2559,7 +2856,18 @@ const resolvers = {
         voteAverage: args.item.voteAverage ?? 0,
         popularity: args.item.popularity ?? 0,
         genreIds: args.item.genreIds ?? [],
-      });
+      };
+      const [profile, socialContext] = await Promise.all([
+        buildTasteProfile(userId),
+        buildMatchSocialContext(userId, [scoreItem]),
+      ]);
+      return scoreFromProfile(
+        profile,
+        {
+          ...scoreItem,
+        },
+        socialContext.signals.get(getMatchItemKey(scoreItem) ?? ""),
+      );
     },
     releaseEvents: async (_: unknown, args: any, context: any) => {
       if (!hasDb()) return { items: [], total: 0 };

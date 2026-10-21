@@ -49,6 +49,11 @@ const privateQuery = `
       score
       label
       color
+      tasteScore
+      communityScore
+      communityRatingCount
+      similarUserScore
+      similarUserCount
       insufficientData
       reasons
     }
