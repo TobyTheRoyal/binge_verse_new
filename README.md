@@ -17,6 +17,7 @@ npm run lint
 ```
 
 `npm test` uses isolated HTTP servers and mocked session persistence. It does not create accounts or delete data in the configured MongoDB database.
+The optional MongoDB regression test runs only when `TEST_MONGODB_URI` is explicitly set, with optional `TEST_MONGODB_DB`. It creates and removes its own randomly named temporary collection; it never writes to the application's ratings collection.
 The older root-level `test-*.mjs` scripts are manual probes, some of which create real database records. They are deliberately not part of the automated test command; use a disposable database for them.
 
 ## Code Organization
@@ -49,7 +50,7 @@ New backend modules should use concrete types or validate `unknown` at their bou
 
 1. Replace the MongoDB password and TMDB/OMDb keys previously present in the tracked example file. Removing them does not remove them from Git history or copies.
 2. Set `NODE_ENV=production`, exact HTTPS `APP_ORIGINS`, `MONGODB_URI`, `REDIS_URL` and `TMDB_API_KEY`. Configure `HOST` for your hosting environment. MongoDB and Redis must use private/authenticated connections in production.
-3. Build with `npm run build`. Run `npm run db:indexes` once during deployment before starting traffic. This command creates declared indexes; it never calls `syncIndexes`, deletes records or drops indexes. Review any duplicate-index error rather than deleting existing data.
+3. Build with `npm run build`. Run `npm run db:indexes` once during deployment before starting traffic. This command creates declared indexes and migrates the obsolete title-only rating uniqueness constraint to the season-aware constraint. It verifies the replacement before removing only the obsolete rating index; it never calls `syncIndexes` or deletes records. Review any duplicate-index error rather than deleting existing data.
 4. Start the compiled API with `npm start`. Serve `dist/` through the frontend host/CDN with SPA fallback and proxy `/api` and `/graphql` to the API. Apply CSP and HTTPS/security headers at the frontend host too; the Express middleware covers API responses.
 5. Configure `TRUST_PROXY` only with the exact trusted proxy addresses/ranges used by your host. Do not enable trust for arbitrary forwarded headers.
 6. Use `/health` for liveness and `/ready` for MongoDB/Redis readiness. Configure alerts, request logs without credentials, backups and tested restores.
@@ -58,6 +59,8 @@ Redis stores shared rate limits across API instances. Development uses a local i
 Metadata and similar-user caches are bounded per process; they are not a distributed response cache.
 
 The session migration creates a `sessions` collection with unique token hashes and a TTL index. Existing watchlists, ratings, episode progress and roles are preserved. Previous JWT cookies no longer authenticate; users sign in again. A valid session is revoked on logout, and privileges are read from the database rather than cookie claims.
+
+For older databases that reject a second season rating, run `npm run db:migrate:ratings`. The idempotent migration creates and verifies unique `(userId, tmdbId, mediaType, seasonNumber)` keys before removing the obsolete unique `(userId, tmdbId, mediaType)` index. No ratings are changed or removed; per-season ratings and the series aggregate can coexist.
 
 To assign a role to an existing account, use the controlled server-side maintenance command:
 

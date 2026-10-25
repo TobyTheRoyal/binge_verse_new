@@ -49,6 +49,14 @@ Page bundles are now loaded per route, with a loading state and a recoverable er
 - Route splitting reduces the main JavaScript bundle from approximately 501 kB to 390 kB before compression; route-specific bundles are loaded separately. This is not a load-test result.
 - Safe index and role maintenance commands were added, but no manual production index migration, role change or data deletion was run. Real Redis/multi-instance verification and external penetration/load tests remain open.
 
+## Season Rating Follow-Up (2026-10-22)
+
+The configured database still contained the pre-season unique rating index `(userId, tmdbId, mediaType)` alongside the correct season-aware index. The old constraint rejected a second season and the aggregate series record; optimistic UI changes were then rolled back without an error message.
+
+`db:migrate:ratings` now creates and verifies the season-aware unique constraint before removing only the obsolete title-only unique index. `db:indexes` runs the same migration for future deployments. The migration was applied to the configured local-development database and removed one obsolete index without editing rating documents. Rating failures now display an accessible message beside the rating controls.
+
+Verification: 23 isolated tests pass, including five new schema/migration tests. The separately enabled MongoDB regression test reproduced the duplicate-key failure in its own temporary collection, then verified independent half-star season ratings, an aggregate series rating, duplicate prevention and repeatable migration after the fix. The test collection was removed. Typecheck, changed-file lint and production build also pass.
+
 ## References
 
 - [GraphQL security guidance](https://www.graphql.org/learn/security/)

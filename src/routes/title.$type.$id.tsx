@@ -169,7 +169,7 @@ function SeasonRatingCard({
 export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number }) {
   const { user } = useAuth();
   const { inList, toggle } = useWatchlist();
-  const { getRating, setRating, removeRating } = useRatings();
+  const { getRating, setRating, removeRating, error: ratingError } = useRatings();
   const { progress, setStatus, setEpisodeWatched, setSeasonWatched, removeProgress, updating } =
     useWatchProgress(id, media);
   const [activeSeason, setActiveSeason] = useState<number | null>(null);
@@ -509,6 +509,11 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
               </div>
 
               {/* Rating widget */}
+              {user && media === "movie" && ratingError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {ratingError}
+                </p>
+              )}
               {user && (
                 <div className="bg-surface border border-border rounded-2xl p-4 max-w-md">
                   <div className="flex items-center justify-between mb-2">
@@ -566,6 +571,11 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                 <h2 className="text-2xl font-extrabold tracking-tight">Staffel-Bewertungen</h2>
                 <span className="text-[10px] uppercase text-muted-foreground">pro Staffel</span>
               </div>
+              {user && ratingError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {ratingError}
+                </p>
+              )}
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {seasonCards.map((season) => (
                   <SeasonRatingCard

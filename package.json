@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test server/tests/*.test.ts",
     "db:indexes": "tsx scripts/create-indexes.ts",
+    "db:migrate:ratings": "tsx scripts/migrate-rating-indexes.ts",
     "user:role": "tsx scripts/set-user-role.ts",
     "lint": "eslint .",
     "format": "prettier --write ."

@@ -416,7 +416,17 @@ export function useRatings() {
     removeMutation.mutate({ id, media_type, seasonNumber });
   };
 
-  return { items, getRating, setRating, removeRating, loading: query.isLoading };
+  return {
+    items,
+    getRating,
+    setRating,
+    removeRating,
+    loading: query.isLoading,
+    error:
+      setMutation.isError || removeMutation.isError
+        ? "Die Bewertung konnte nicht gespeichert werden. Bitte versuche es erneut."
+        : null,
+  };
 }
 
 export function useWatchProgress(id?: number, media_type?: Media) {

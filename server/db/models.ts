@@ -12,6 +12,7 @@ import {
   CONFIRMATION_STATUSES,
   DATE_PRECISIONS,
 } from "../../shared/catalog.js";
+import { RATING_UNIQUE_KEY } from "./rating-indexes.js";
 
 function modelFor<S extends Schema>(name: string, schema: S): Model<InferSchemaType<S>> {
   return (
@@ -35,7 +36,7 @@ const ratingSchema = new Schema(
   { timestamps: true },
 );
 
-ratingSchema.index({ userId: 1, tmdbId: 1, mediaType: 1, seasonNumber: 1 }, { unique: true });
+ratingSchema.index(RATING_UNIQUE_KEY, { unique: true });
 ratingSchema.index({ seasonNumber: 1, tmdbId: 1, mediaType: 1, userId: 1 });
 ratingSchema.index({ userId: 1, updatedAt: -1 });
 
