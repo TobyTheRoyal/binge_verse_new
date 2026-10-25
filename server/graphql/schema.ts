@@ -222,6 +222,7 @@ export const typeDefs = /* GraphQL */ `
     email: String!
     role: UserRole!
     isAdmin: Boolean!
+    isDemo: Boolean!
   }
 
   type AuthPayload {

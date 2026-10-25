@@ -15,11 +15,15 @@
     "preview": "vite preview",
     "start": "node dist-server/server/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test server/tests/*.test.ts",
+    "generate:api": "tsx scripts/generate-api-types.ts",
+    "check:api": "tsx scripts/generate-api-types.ts --check",
+    "test": "tsx scripts/test.ts",
+    "test:integration": "npm run build && tsx scripts/test-integration.ts",
+    "demo:preview": "npm run build && tsx scripts/preview-demo.ts",
     "db:indexes": "tsx scripts/create-indexes.ts",
     "db:migrate:ratings": "tsx scripts/migrate-rating-indexes.ts",
     "user:role": "tsx scripts/set-user-role.ts",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "format": "prettier --write ."
   },
   "dependencies": {
@@ -90,10 +94,13 @@
     "tw-animate-css": "^1.3.4",
     "vaul": "^1.1.2",
     "vite-tsconfig-paths": "^6.0.2",
-    "zod": "^3.24.2"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
+    "@graphql-codegen/core": "^6.2.2",
+    "@graphql-codegen/typescript": "^6.1.2",
+    "@graphql-codegen/typescript-resolvers": "^6.1.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^22.16.5",
@@ -106,6 +113,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
+    "mongodb-memory-server-core": "^11.3.0",
     "prettier": "^3.7.3",
     "tsx": "^4.22.4",
     "typescript": "^5.8.3",

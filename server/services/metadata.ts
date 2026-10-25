@@ -100,7 +100,7 @@ const client = new MetadataClient({
 export async function tmdb<T>(path: string, params: Params = {}) {
   if (!config.TMDB_API_KEY)
     throw new PublicError("Metadatendienst nicht konfiguriert.", 503, "SERVICE_UNAVAILABLE");
-  const url = new URL(`https://api.themoviedb.org/3${path}`);
+  const url = new URL(`/3${path}`, config.TMDB_API_ORIGIN);
   url.searchParams.set("api_key", config.TMDB_API_KEY);
   url.searchParams.set("language", config.TMDB_LANGUAGE);
   for (const [key, value] of Object.entries(params)) {

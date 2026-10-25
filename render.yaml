@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: binge-portfolio
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm ci --include=dev --legacy-peer-deps && npm run build
+    startCommand: npm start
+    healthCheckPath: /ready
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: SERVE_WEB
+        value: "true"
+      - key: RUN_MIGRATIONS
+        value: "true"
+      - key: DEMO_ENABLED
+        value: "true"
+      - key: REGISTRATION_ENABLED
+        value: "false"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: MONGODB_DB
+        value: binge_portfolio
+      - key: MONGODB_URI
+        sync: false
+      - key: TMDB_API_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: binge-portfolio-limits
+          property: connectionString
+  - type: keyvalue
+    name: binge-portfolio-limits
+    region: frankfurt
+    plan: free
+    maxmemoryPolicy: noeviction
+    ipAllowList: []

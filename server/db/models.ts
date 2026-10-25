@@ -5,6 +5,7 @@ import mongoose, {
   type HydratedDocument,
 } from "mongoose";
 import {
+  MEDIA_TYPES,
   WATCH_STATUSES,
   USER_ROLES,
   RELEASE_TYPES,
@@ -25,7 +26,7 @@ const ratingSchema = new Schema(
   {
     userId: { type: String, required: true, index: true },
     tmdbId: { type: Number, required: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
+    mediaType: { type: String, required: true, enum: MEDIA_TYPES },
     seasonNumber: { type: Number, default: null },
     title: { type: String, required: true },
     posterPath: { type: String, default: null },
@@ -44,7 +45,7 @@ const watchlistSchema = new Schema(
   {
     userId: { type: String, required: true, index: true },
     tmdbId: { type: Number, required: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
+    mediaType: { type: String, required: true, enum: MEDIA_TYPES },
     title: { type: String, required: true },
     posterPath: { type: String, default: null },
     releaseDate: { type: String, default: null },
@@ -59,7 +60,7 @@ const watchProgressSchema = new Schema(
   {
     userId: { type: String, required: true, index: true },
     tmdbId: { type: Number, required: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"] },
+    mediaType: { type: String, required: true, enum: MEDIA_TYPES },
     title: { type: String, required: true },
     posterPath: { type: String, default: null },
     releaseDate: { type: String, default: null },
@@ -104,7 +105,7 @@ episodeProgressSchema.index({ userId: 1, watchedAt: -1 });
 const releaseEventSchema = new Schema(
   {
     tmdbId: { type: Number, required: true, index: true },
-    mediaType: { type: String, required: true, enum: ["movie", "tv"], index: true },
+    mediaType: { type: String, required: true, enum: MEDIA_TYPES, index: true },
     title: { type: String, required: true, trim: true },
     posterPath: { type: String, default: null },
     backdropPath: { type: String, default: null },
@@ -199,6 +200,16 @@ const storyDnaSchema = new Schema(
 
 storyDnaSchema.index({ tmdbId: 1, mediaType: 1 }, { unique: true });
 
+for (const schema of [
+  ratingSchema,
+  watchlistSchema,
+  watchProgressSchema,
+  episodeProgressSchema,
+  tasteProfileSchema,
+]) {
+  schema.add({ demoExpiresAt: { type: Date, expires: 0 } });
+}
+
 export const Rating = modelFor("Rating", ratingSchema);
 export const WatchlistItem = modelFor("WatchlistItem", watchlistSchema);
 export const WatchProgress = modelFor("WatchProgress", watchProgressSchema);
@@ -206,6 +217,17 @@ export const EpisodeProgress = modelFor("EpisodeProgress", episodeProgressSchema
 export const ReleaseEvent = modelFor("ReleaseEvent", releaseEventSchema);
 export const TasteProfile = modelFor("TasteProfile", tasteProfileSchema);
 export const StoryDna = modelFor("StoryDna", storyDnaSchema);
+
+export type RatingRecord = InferSchemaType<typeof ratingSchema> & { _id: mongoose.Types.ObjectId };
+export type SavedRecord = InferSchemaType<typeof watchlistSchema> & {
+  _id: mongoose.Types.ObjectId;
+};
+export type EpisodeProgressRecord = InferSchemaType<typeof episodeProgressSchema> & {
+  _id: mongoose.Types.ObjectId;
+};
+export type ReleaseEventRecord = InferSchemaType<typeof releaseEventSchema> & {
+  _id: mongoose.Types.ObjectId;
+};
 
 const userSchema = new Schema(
   {

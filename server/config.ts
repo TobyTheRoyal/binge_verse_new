@@ -16,9 +16,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       REDIS_URL: z.string().optional(),
       TRUST_PROXY: z.string().default(""),
       TMDB_API_KEY: z.string().optional(),
+      TMDB_API_ORIGIN: z.url().default("https://api.themoviedb.org"),
       OMDB_API_KEY: z.string().optional(),
       TMDB_LANGUAGE: z.string().default("de-DE"),
+      DEMO_ENABLED: z
+        .enum(["true", "false"])
+        .default(env.NODE_ENV === "production" ? "false" : "true")
+        .transform((value) => value === "true"),
+      REGISTRATION_ENABLED: z
+        .enum(["true", "false"])
+        .default("true")
+        .transform((value) => value === "true"),
+      SERVE_WEB: z
+        .enum(["true", "false"])
+        .default("false")
+        .transform((value) => value === "true"),
+      RUN_MIGRATIONS: z
+        .enum(["true", "false"])
+        .default("false")
+        .transform((value) => value === "true"),
+      DEMO_TTL_SECONDS: integer(86400, 300, 86400),
+      DEMO_RATE_LIMIT: integer(5, 1, 100),
+      DEMO_DAILY_LIMIT: integer(200, 1, 10000),
       SESSION_TTL_SECONDS: integer(604800, 300, 2592000),
+      DEV_COOKIE_NAME: z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{1,80}$/)
+        .default("bingeverse_session"),
       API_RATE_LIMIT: integer(300),
       API_RATE_WINDOW_MS: integer(60000, 1000),
       AUTH_RATE_LIMIT: integer(15),
@@ -45,8 +69,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       `Invalid configuration: ${parsed.error.issues.map((issue) => issue.path.join(".")).join(", ")}`,
     );
   }
-  const config = parsed.data;
+  const config = {
+    ...parsed.data,
+    APP_ORIGINS: parsed.data.APP_ORIGINS ?? env.RENDER_EXTERNAL_URL,
+  };
   const isProduction = config.NODE_ENV === "production";
+  if (
+    config.TMDB_API_ORIGIN !== "https://api.themoviedb.org" &&
+    !(config.NODE_ENV === "test" && /^http:\/\/127\.0\.0\.1:\d+$/.test(config.TMDB_API_ORIGIN))
+  )
+    throw new Error("Custom metadata origins are allowed only for loopback test fixtures.");
   if (
     isProduction &&
     (!config.APP_ORIGINS || !config.MONGODB_URI || !config.REDIS_URL || !config.TMDB_API_KEY)

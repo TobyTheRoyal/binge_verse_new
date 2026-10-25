@@ -17,6 +17,20 @@ test("production fails closed without storage and exact HTTPS origins", () => {
   assert.throws(() => loadConfig({ ...production, APP_ORIGINS: "*" }));
   assert.throws(() => loadConfig({ ...production, APP_ORIGINS: "http://binge.example" }));
   assert.throws(() => loadConfig({ PORT: "NaN" }));
+  assert.equal(
+    loadConfig({
+      ...production,
+      APP_ORIGINS: undefined,
+      RENDER_EXTERNAL_URL: "https://binge-portfolio.onrender.com",
+    }).origins[0],
+    "https://binge-portfolio.onrender.com",
+  );
+  assert.equal(loadConfig(production).DEMO_ENABLED, false);
+  assert.equal(
+    loadConfig({ ...production, REGISTRATION_ENABLED: "false" }).REGISTRATION_ENABLED,
+    false,
+  );
+  assert.throws(() => loadConfig({ ...production, TMDB_API_ORIGIN: "http://untrusted.example" }));
 });
 
 test("registration validates email, length and bcrypt byte limit without breaking old logins", () => {

@@ -310,6 +310,7 @@ export function useRatings() {
   });
 
   const setMutation = useMutation({
+    scope: { id: `ratings:${user?.id ?? "guest"}` },
     mutationFn: async (item: Omit<RatingEntry, "ratedAt" | "addedAt">) => {
       await graphqlClient.request(
         `
@@ -371,6 +372,7 @@ export function useRatings() {
         { userId: user!.id, tmdbId: id, mediaType: media_type, seasonNumber: seasonNumber ?? null },
       );
     },
+    scope: { id: `ratings:${user?.id ?? "guest"}` },
     onMutate: async ({ id, media_type, seasonNumber }) => {
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<RatingEntry[]>(queryKey);
@@ -382,7 +384,7 @@ export function useRatings() {
               entry.id === id &&
               entry.media_type === media_type &&
               (seasonNumber == null
-                ? entry.seasonNumber == null
+                ? media_type === "tv" || entry.seasonNumber == null
                 : entry.seasonNumber === seasonNumber)
             ),
         ),
@@ -397,6 +399,7 @@ export function useRatings() {
   });
 
   const items = useMemo(() => query.data ?? [], [query.data]);
+  const titleItems = useMemo(() => items.filter((entry) => entry.seasonNumber == null), [items]);
   const getRating = (id: number, media_type: Media, seasonNumber?: number | null) =>
     items.find(
       (entry) =>
@@ -407,23 +410,27 @@ export function useRatings() {
 
   const setRating = (item: Omit<RatingEntry, "ratedAt" | "addedAt">) => {
     if (!user) return false;
+    removeMutation.reset();
     setMutation.mutate(item);
     return true;
   };
 
   const removeRating = (id: number, media_type: Media, seasonNumber?: number | null) => {
     if (!user) return;
+    setMutation.reset();
     removeMutation.mutate({ id, media_type, seasonNumber });
   };
 
   return {
     items,
+    titleItems,
     getRating,
     setRating,
     removeRating,
     loading: query.isLoading,
-    error:
-      setMutation.isError || removeMutation.isError
+    error: query.isError
+      ? "Die Bewertungen konnten nicht geladen werden."
+      : setMutation.isError || removeMutation.isError
         ? "Die Bewertung konnte nicht gespeichert werden. Bitte versuche es erneut."
         : null,
   };

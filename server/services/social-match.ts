@@ -48,7 +48,7 @@ async function findNeighbors(userId: string): Promise<Neighbor[]> {
     then: Number(rating.rating),
   }));
   return Rating.aggregate<Neighbor>([
-    { $match: { userId: { $ne: userId }, seasonNumber: null, $or: pairs } },
+    { $match: { userId: { $ne: userId, $not: /^demo:/ }, seasonNumber: null, $or: pairs } },
     {
       $group: {
         _id: "$userId",
@@ -107,7 +107,13 @@ export async function buildMatchSocialContext(userId: string, items: Item[]) {
     community: AggregateRating[];
     similar: AggregateRating[];
   }>([
-    { $match: { userId: { $ne: userId }, seasonNumber: null, $or: [...unique.values()] } },
+    {
+      $match: {
+        userId: { $ne: userId, $not: /^demo:/ },
+        seasonNumber: null,
+        $or: [...unique.values()],
+      },
+    },
     {
       $facet: {
         community: [

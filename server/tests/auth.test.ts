@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import type { Response } from "express";
 import { Session, User } from "../db/models.js";
+import { createDemoId } from "../demo/identity.js";
 import {
   AUTH_COOKIE_NAME,
   authorizeUser,
@@ -66,6 +67,8 @@ test("sessions persist only token hashes; logout revokes captured cookies", asyn
 });
 
 test("invalid and old JWT cookies never authenticate", async () => {
+  const headers = { cookie: `${AUTH_COOKIE_NAME}=invalid`, get: "not-a-method" };
+  assert.equal(sessionToken({ headers }), null);
   assert.equal(sessionToken({ headers: { cookie: `${AUTH_COOKIE_NAME}=%E0%A4%A` } }), null);
   assert.equal(
     await getAuthUserFromRequest({
@@ -109,4 +112,28 @@ test("ownership and admin checks reject anonymous and different users", () => {
   assert.throws(() => authorizeUser({ user }, "another-user"));
   assert.throws(() => requireAdmin({ user }));
   assert.equal(requireAdmin({ user: { ...user, role: "ADMIN" } }).id, "owner");
+});
+
+test("demo authentication uses a revocable stored session bounded by the visitor expiry", async () => {
+  let cookie = "";
+  const response = {
+    append: (_name: string, value: string) => {
+      cookie = value;
+    },
+  } as unknown as Response;
+  const expiresAt = new Date(Date.now() + 60000);
+  await setAuthCookie(response, { id: createDemoId(expiresAt) });
+  const request = { headers: { cookie } };
+  const user = await getAuthUserFromRequest(request);
+  assert.equal(user?.isDemo, true);
+  assert.equal(user?.role, "USER");
+  assert.equal(user?.isAdmin, false);
+  assert.equal(
+    sessions
+      .get(createHash("sha256").update(sessionToken(request)!).digest("hex"))
+      ?.expiresAt.getTime(),
+    expiresAt.getTime(),
+  );
+  await clearAuthCookie(response, request);
+  assert.equal(await getAuthUserFromRequest(request), null);
 });

@@ -123,8 +123,8 @@ function SeasonRatingCard({
   seasonName: string;
   posterPath?: string | null;
   currentRating: number;
-  onRate: (rating: number) => void;
-  onRemove: () => void;
+  onRate?: (rating: number) => void;
+  onRemove?: () => void;
 }) {
   return (
     <div className="rounded-2xl border border-border bg-surface/80 p-3 shadow-sm">
@@ -146,7 +146,7 @@ function SeasonRatingCard({
           <div className="text-[10px] uppercase text-muted-foreground">Staffel {seasonNumber}</div>
           <div className="truncate text-sm font-semibold">{seasonName}</div>
         </div>
-        {currentRating > 0 && (
+        {currentRating > 0 && onRemove && (
           <button
             onClick={onRemove}
             className="text-[10px] text-muted-foreground hover:text-destructive"
@@ -544,11 +544,6 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                               vote_average: d.vote_average,
                               rating,
                             });
-                            setStatus({
-                              ...item,
-                              status: "COMPLETED",
-                              totalEpisodes: 1,
-                            });
                           }
                         : undefined
                     }
@@ -584,27 +579,22 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                     seasonName={season.seasonName}
                     posterPath={season.posterPath}
                     currentRating={season.rating}
-                    onRate={(rating) => {
-                      setRating({
-                        id: d.id,
-                        media_type: d.media_type,
-                        title: d.title,
-                        poster_path: d.poster_path,
-                        release_date: d.release_date,
-                        vote_average: d.vote_average,
-                        seasonNumber: season.seasonNumber,
-                        rating,
-                      });
-                      if (seasonQ.data?.season_number === season.seasonNumber) {
-                        setSeasonWatched({
-                          item,
-                          seasonNumber: season.seasonNumber,
-                          episodes: seasonQ.data.episodes.filter(isAvailable),
-                          watched: true,
-                          totalEpisodes,
-                        });
-                      }
-                    }}
+                    onRate={
+                      user
+                        ? (rating) => {
+                            setRating({
+                              id: d.id,
+                              media_type: d.media_type,
+                              title: d.title,
+                              poster_path: d.poster_path,
+                              release_date: d.release_date,
+                              vote_average: d.vote_average,
+                              seasonNumber: season.seasonNumber,
+                              rating,
+                            });
+                          }
+                        : undefined
+                    }
                     onRemove={() => removeRating(d.id, d.media_type, season.seasonNumber)}
                   />
                 ))}

@@ -3,8 +3,8 @@ import { Loader2 } from "lucide-react";
 import { Navbar } from "./components/Navbar";
 import { BrandLogo } from "./components/BrandLogo";
 import { RouteBoundary } from "./components/RouteBoundary";
-import { useNavigation, Link } from "./lib/navigation";
-
+import { useNavigation } from "./lib/navigation-context";
+import { Link } from "./lib/navigation";
 const AuthPage = lazy(() => import("./routes/auth").then((m) => ({ default: m.AuthPage })));
 const AdminPage = lazy(() => import("./routes/admin").then((m) => ({ default: m.AdminPage })));
 const BrowsePage = lazy(() => import("./routes/browse").then((m) => ({ default: m.BrowsePage })));
@@ -24,23 +24,21 @@ const DetailPage = lazy(() =>
 const WatchlistPage = lazy(() =>
   import("./routes/watchlist").then((m) => ({ default: m.WatchlistPage })),
 );
-
 export function App() {
   const { pathname } = useNavigation();
   const detailMatch = pathname.match(/^\/title\/(movie|tv)\/(\d+)$/);
-
   let page = <NotFoundPage />;
   if (pathname === "/") page = <HomePage />;
   else if (pathname === "/browse") page = <BrowsePage />;
   else if (pathname === "/calendar") page = <CalendarPage />;
   else if (pathname === "/admin") page = <AdminPage />;
-  else if (pathname === "/auth") page = <AuthPage />;
+  else if (pathname === "/auth" || pathname === "/demo") page = <AuthPage />;
+  else if (pathname === "/credits") page = <CreditsPage />;
   else if (pathname === "/watchlist") page = <WatchlistPage />;
   else if (pathname === "/history") page = <HistoryPage />;
   else if (pathname === "/taste-dna") page = <TasteDnaPage />;
   else if (detailMatch)
     page = <DetailPage media={detailMatch[1] as "movie" | "tv"} id={Number(detailMatch[2])} />;
-
   return (
     <div className="min-h-screen flex flex-col">
       <a
@@ -90,20 +88,97 @@ export function App() {
             <Link href="/calendar" className="hover:text-primary">
               Kalender
             </Link>
-            <span className="text-xs text-muted-foreground/70">Filmdaten von TMDB & OMDb</span>
+            <Link href="/credits" className="text-xs hover:text-primary">
+              Datenquellen & Credits
+            </Link>
           </nav>
         </div>
       </footer>
     </div>
   );
 }
-
+function CreditsPage() {
+  return (
+    <section className="mx-auto max-w-3xl space-y-8 px-4 py-12 sm:px-6">
+      <h1 className="text-2xl font-bold">Datenquellen & Credits</h1>
+      <div className="space-y-3">
+        <a
+          href="https://www.themoviedb.org"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-block"
+        >
+          <img
+            src="/tmdb.svg"
+            width="64"
+            height="46"
+            alt="The Movie Database"
+            className="h-auto w-16"
+          />
+        </a>
+        <p className="text-sm">
+          This product uses the TMDB API but is not endorsed or certified by TMDB.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Film- und Serieninformationen sowie die zugehörigen Bilder stammen von TMDB.
+          Streaming-Verfügbarkeit wird über TMDB von{" "}
+          <a
+            href="https://www.justwatch.com/at"
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary hover:underline"
+          >
+            JustWatch
+          </a>{" "}
+          bereitgestellt. Zusätzliche Bewertungsdaten stammen von{" "}
+          <a
+            href="https://www.omdbapi.com"
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary hover:underline"
+          >
+            OMDb
+          </a>
+          , sofern konfiguriert.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          TMDB-Logo: Travis Bell, unverändert übernommen über{" "}
+          <a
+            href="https://commons.wikimedia.org/wiki/File:Tmdb.new.logo.svg"
+            target="_blank"
+            rel="noreferrer"
+            className="hover:text-primary"
+          >
+            Wikimedia Commons
+          </a>
+          ,{" "}
+          <a
+            href="https://creativecommons.org/licenses/by-sa/4.0/"
+            target="_blank"
+            rel="noreferrer"
+            className="hover:text-primary"
+          >
+            CC BY-SA 4.0
+          </a>
+          .
+        </p>
+      </div>
+      <div className="space-y-3 border-t border-border pt-6">
+        <h2 className="text-lg font-semibold">Portfolio-Demo</h2>
+        <p className="text-sm text-muted-foreground">
+          Bewertungen und Fortschritt im Demo-Zugang sind fiktive Beispieldaten. Jeder Demo-Besuch
+          erhält einen eigenen temporären Bereich ohne Administratorrechte.
+        </p>
+      </div>
+    </section>
+  );
+}
 function NotFoundPage() {
   return (
     <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4">
       <div className="max-w-md text-center">
         <h1 className="text-7xl font-bold text-foreground">404</h1>
-        <h2 className="mt-4 text-xl font-semibold text-foreground">Page not found</h2>
+        <h2 className="mt-4 text-xl font-semibold text-foreground">Seite nicht gefunden</h2>
         <p className="mt-2 text-sm text-muted-foreground">
           Diese Seite gibt es nicht oder sie wurde verschoben.
         </p>

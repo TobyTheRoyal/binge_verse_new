@@ -8,6 +8,7 @@ import { config } from "./config.js";
 import { PublicError } from "./errors.js";
 import { loginSchema, registrationSchema } from "../shared/auth.js";
 import { USER_ROLES, type UserRole } from "../shared/catalog.js";
+import { demoExpiry, demoProfile } from "./demo/identity.js";
 
 export type AuthUser = {
   id: string;
@@ -15,19 +16,25 @@ export type AuthUser = {
   email: string;
   role: UserRole;
   isAdmin: boolean;
+  isDemo?: boolean;
 };
 export type AuthContext = { user?: AuthUser | null; response?: Response; request?: Request };
 type CookieRequest = Request | { headers: { cookie?: string } };
 export const AUTH_COOKIE_NAME = config.isProduction
   ? "__Host-bingeverse_session"
-  : "bingeverse_session";
+  : config.DEV_COOKIE_NAME;
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 // Fixed-cost password comparison also runs for an unknown email address.
 const dummyHash = bcrypt.hashSync(randomBytes(32).toString("hex"), 12);
 
 export function sessionToken(request?: CookieRequest | null) {
   const headers = request?.headers;
-  const cookie = headers && "get" in headers ? headers.get("cookie") : headers?.cookie;
+  const cookie =
+    headers && "get" in headers && typeof headers.get === "function"
+      ? headers.get("cookie")
+      : headers && "cookie" in headers
+        ? headers.cookie
+        : undefined;
   const token = parseCookie(cookie ?? "")[AUTH_COOKIE_NAME];
   return token && /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
 }
@@ -39,6 +46,7 @@ export function getUserProfile(user: AuthUser) {
     email: user.email,
     role: user.role,
     isAdmin: user.role === "ADMIN" || user.role === "EDITOR",
+    isDemo: Boolean(user.isDemo),
   };
 }
 
@@ -54,6 +62,8 @@ export async function getAuthUserFromRequest(
     .select("userId")
     .lean();
   if (!session) return null;
+  if (session.userId.startsWith("demo:"))
+    return config.DEMO_ENABLED ? demoProfile(session.userId) : null;
   const user = await User.findById(session.userId).select("name email role").lean();
   if (!user) return null;
   const role = USER_ROLES.includes(user.role) ? user.role : "USER";
@@ -82,16 +92,18 @@ export async function setAuthCookie(
   const previous = sessionToken(request);
   if (previous) await Session.deleteOne({ tokenHash: tokenHash(previous) });
   const token = randomBytes(32).toString("base64url");
+  const expiresAt = demoExpiry(user.id) ?? new Date(Date.now() + config.SESSION_TTL_SECONDS * 1000);
+  const maxAge = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
   await Session.create({
     userId: user.id,
     tokenHash: tokenHash(token),
-    expiresAt: new Date(Date.now() + config.SESSION_TTL_SECONDS * 1000),
+    expiresAt,
   });
   response.append(
     "Set-Cookie",
     stringifySetCookie(AUTH_COOKIE_NAME, token, {
       ...cookieOptions,
-      maxAge: config.SESSION_TTL_SECONDS,
+      maxAge,
     }),
   );
 }
@@ -122,7 +134,7 @@ export function authorizeUser(context: AuthContext, userId?: string | null) {
 
 export function requireAdmin(context: AuthContext) {
   const user = requireAuth(context);
-  if (user.role !== "ADMIN" && user.role !== "EDITOR")
+  if (user.isDemo || (user.role !== "ADMIN" && user.role !== "EDITOR"))
     throw new PublicError("Zugriff nicht erlaubt.", 403, "FORBIDDEN");
   return user;
 }
@@ -133,6 +145,8 @@ function assertDb() {
 }
 
 export async function registerUser(input: unknown) {
+  if (!config.REGISTRATION_ENABLED)
+    throw new PublicError("Neue Registrierungen sind hier deaktiviert.", 403);
   assertDb();
   const parsed = registrationSchema.safeParse(input);
   if (!parsed.success)

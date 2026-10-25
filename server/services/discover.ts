@@ -2,12 +2,12 @@ import { WATCH_REGION, type MediaType } from "../../shared/catalog.js";
 
 export type DiscoverOptions = {
   media: MediaType;
-  page?: number;
-  sort?: string;
-  genre?: string;
-  language?: string;
-  provider?: string;
-  year?: string;
+  page?: number | null;
+  sort?: string | null;
+  genre?: string | null;
+  language?: string | null;
+  provider?: string | null;
+  year?: string | null;
 };
 
 export function discoverParameters(args: DiscoverOptions) {

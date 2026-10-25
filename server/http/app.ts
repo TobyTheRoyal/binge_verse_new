@@ -1,4 +1,6 @@
 import { randomUUID, createHash } from "node:crypto";
+import { access } from "node:fs/promises";
+import { resolve } from "node:path";
 import express, { type ErrorRequestHandler, type RequestHandler } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -19,14 +21,18 @@ import {
   setAuthCookie,
 } from "../auth.js";
 import { graphqlProtectionPlugins, inspectGraphqlRequest } from "../graphql/limits.js";
+import { startDemo } from "../demo/service.js";
 
-export async function createApplication(schema: GraphQLSchema) {
+export async function createApplication(
+  schema: GraphQLSchema,
+  options: { serveWeb?: boolean; webDirectory?: string } = {},
+) {
   const app = express();
   app.disable("x-powered-by");
   if (config.TRUST_PROXY)
     app.set(
       "trust proxy",
-      config.TRUST_PROXY.split(",").map((value) => value.trim()),
+      config.TRUST_PROXY === "1" ? 1 : config.TRUST_PROXY.split(",").map((value) => value.trim()),
     );
   const redis = config.REDIS_URL
     ? createClient({
@@ -56,6 +62,11 @@ export async function createApplication(schema: GraphQLSchema) {
     });
   const apiLimiter = limit("api", config.API_RATE_LIMIT, { windowMs: config.API_RATE_WINDOW_MS });
   const authLimiter = limit("auth-ip", config.AUTH_RATE_LIMIT);
+  const demoLimiter = limit("demo-ip", config.DEMO_RATE_LIMIT);
+  const demoDailyLimiter = limit("demo-daily", config.DEMO_DAILY_LIMIT, {
+    windowMs: 86400000,
+    keyGenerator: () => "all",
+  });
   const accountLimiter = limit("auth-account", config.AUTH_RATE_LIMIT * 2, {
     keyGenerator: (request: express.Request, response: express.Response) => {
       const value = String(response.locals.authEmail ?? request.body?.email ?? "")
@@ -76,7 +87,21 @@ export async function createApplication(schema: GraphQLSchema) {
   });
   app.use(
     helmet({
-      contentSecurityPolicy: config.isProduction ? undefined : false,
+      contentSecurityPolicy: config.isProduction
+        ? {
+            directives: {
+              defaultSrc: ["'self'"],
+              scriptSrc: ["'self'"],
+              styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+              fontSrc: ["'self'", "https://fonts.gstatic.com"],
+              imgSrc: ["'self'", "data:", "https://image.tmdb.org"],
+              connectSrc: ["'self'"],
+              frameSrc: ["https://www.youtube-nocookie.com", "https://www.youtube.com"],
+              objectSrc: ["'none'"],
+              frameAncestors: ["'none'"],
+            },
+          }
+        : false,
       strictTransportSecurity: config.isProduction
         ? { maxAge: 31536000, includeSubDomains: false }
         : false,
@@ -84,9 +109,11 @@ export async function createApplication(schema: GraphQLSchema) {
   );
   app.use((request, response, next) => {
     const origin = request.headers.origin;
+    const apiRequest = /^\/(api|graphql)(\/|$)/.test(request.path);
     if (
-      (origin && !config.origins.includes(origin)) ||
-      request.headers["sec-fetch-site"] === "cross-site"
+      apiRequest &&
+      ((origin && !config.origins.includes(origin)) ||
+        request.headers["sec-fetch-site"] === "cross-site")
     ) {
       response.status(403).json({ error: "Anfrage von dieser Herkunft ist nicht erlaubt." });
       return;
@@ -117,7 +144,19 @@ export async function createApplication(schema: GraphQLSchema) {
   });
   app.get("/api/me", async (request, response) => {
     const user = await getAuthUserFromRequest(request);
-    response.json({ user: user ? getUserProfile(user) : null });
+    response.json({
+      user: user ? getUserProfile(user) : null,
+      demoEnabled: config.DEMO_ENABLED,
+      registrationEnabled: config.REGISTRATION_ENABLED,
+    });
+  });
+  app.post("/api/demo", demoLimiter, demoDailyLimiter, async (request, response) => {
+    const existing = await getAuthUserFromRequest(request);
+    if (existing && !existing.isDemo)
+      throw new PublicError("Bitte melde dich zuerst von deinem Konto ab.", 409);
+    const user = existing ?? (await startDemo());
+    if (!existing) await setAuthCookie(response, user, request);
+    response.json({ user });
   });
   app.post("/api/register", authLimiter, accountLimiter, async (request, response) => {
     const user = await registerUser(request.body);
@@ -171,6 +210,32 @@ export async function createApplication(schema: GraphQLSchema) {
     }),
   });
   app.use("/graphql", yoga as RequestHandler);
+  app.use(["/api", "/graphql"], (_request, response) =>
+    response.status(404).json({ error: "Endpunkt nicht gefunden." }),
+  );
+  if (options.serveWeb ?? config.SERVE_WEB) {
+    const directory = options.webDirectory ?? resolve("dist");
+    const index = resolve(directory, "index.html");
+    await access(index);
+    app.use(
+      express.static(directory, {
+        index: false,
+        setHeaders: (response, path) => {
+          response.setHeader(
+            "Cache-Control",
+            path.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+          );
+        },
+      }),
+    );
+    app.use("/assets", (_request, response) =>
+      response.status(404).json({ error: "Datei nicht gefunden." }),
+    );
+    app.get("/{*path}", (_request, response) => {
+      response.setHeader("Cache-Control", "no-cache");
+      response.sendFile(index);
+    });
+  }
   const handleError: ErrorRequestHandler = (error: unknown, _request, response, _next) => {
     if (response.headersSent) return;
     const malformed = error instanceof SyntaxError;

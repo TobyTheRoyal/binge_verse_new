@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { History as HistoryIcon, Star, Trash2 } from "lucide-react";
+import { History as HistoryIcon, Star, Trash2, Loader2 } from "lucide-react";
 import { posterUrl } from "@/lib/media-assets";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -20,7 +20,7 @@ const STATUS_LABELS: Record<WatchStatus, string> = {
 
 export function HistoryPage() {
   const { user } = useAuth();
-  const { items, removeRating } = useRatings();
+  const { titleItems: items, removeRating, loading, error: ratingError } = useRatings();
   const { items: progressItems } = useWatchProgressList();
   const { removeProgress } = useWatchProgressActions();
   const [filter, setFilter] = useState<"all" | "movie" | "tv">("all");
@@ -86,6 +86,7 @@ export function HistoryPage() {
             <button
               key={t}
               onClick={() => setFilter(t)}
+              aria-pressed={filter === t}
               className={`px-4 h-9 rounded-full text-sm font-semibold transition ${filter === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
               {t === "all" ? "Alle" : t === "movie" ? "Filme" : "Serien"}
@@ -93,6 +94,7 @@ export function HistoryPage() {
           ))}
         </div>
         <select
+          aria-label="Mindestbewertung"
           value={minRating}
           onChange={(e) => setMinRating(Number(e.target.value))}
           className="h-10 px-4 rounded-full bg-surface border border-border text-sm"
@@ -104,6 +106,7 @@ export function HistoryPage() {
           <option value={9}>≥ 9 ⭐</option>
         </select>
         <select
+          aria-label="Bewertungen sortieren"
           value={sort}
           onChange={(e) => setSort(e.target.value as "recent" | "highest" | "lowest" | "title")}
           className="h-10 px-4 rounded-full bg-surface border border-border text-sm"
@@ -180,7 +183,9 @@ export function HistoryPage() {
                   </div>
                   <button
                     onClick={() => removeProgress({ id: it.id, media_type: it.media_type })}
-                    className="self-start size-9 grid place-items-center rounded-full hover:bg-destructive/10 hover:text-destructive transition opacity-0 group-hover:opacity-100"
+                    aria-label={`Fortschritt für ${it.title} entfernen`}
+                    title="Fortschritt entfernen"
+                    className="self-start size-9 grid place-items-center rounded-full hover:bg-destructive/10 hover:text-destructive transition opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
                   >
                     <Trash2 className="size-4" />
                   </button>
@@ -199,7 +204,20 @@ export function HistoryPage() {
           </p>
         </div>
 
-        {filtered.length === 0 ? (
+        {ratingError && (
+          <p role="alert" className="text-sm text-destructive">
+            {ratingError}
+          </p>
+        )}
+        {loading ? (
+          <div
+            role="status"
+            aria-label="Bewertungen werden geladen"
+            className="grid place-items-center py-12"
+          >
+            <Loader2 className="size-5 animate-spin" aria-hidden="true" />
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="py-20 text-center text-muted-foreground">Keine Einträge.</div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -240,7 +258,9 @@ export function HistoryPage() {
                   </div>
                   <button
                     onClick={() => removeRating(it.id, it.media_type)}
-                    className="self-start size-9 grid place-items-center rounded-full hover:bg-destructive/10 hover:text-destructive transition opacity-0 group-hover:opacity-100"
+                    aria-label={`Bewertung für ${it.title} löschen`}
+                    title="Bewertung löschen"
+                    className="self-start size-9 grid place-items-center rounded-full hover:bg-destructive/10 hover:text-destructive transition opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
                   >
                     <Trash2 className="size-4" />
                   </button>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
-import { Link, useNavigate, useNavigation } from "@/lib/navigation";
+import { Link } from "@/lib/navigation";
+import { useNavigate, useNavigation } from "@/lib/navigation-context";
 import { useMediaSuggestions } from "@/hooks/use-media-suggestions";
 import { posterUrl } from "@/lib/media-assets";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -18,9 +19,8 @@ import {
   Dna,
   Settings,
 } from "lucide-react";
-
 export function Navbar() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, demoAvailable } = useAuth();
   const navigate = useNavigate();
   const { pathname } = useNavigation();
   const [q, setQ] = useState("");
@@ -29,18 +29,15 @@ export function Navbar() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-
   useEffect(() => {
     setMenuOpen(false);
     setSearchOpen(false);
   }, [pathname]);
-
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setSearchOpen(false);
     if (q.trim()) navigate(`/browse?q=${encodeURIComponent(q.trim())}`);
   };
-
   const navItems = [
     { href: "/", label: "Entdecken", icon: Compass },
     { href: "/browse", label: "Browse", icon: Clapperboard },
@@ -54,9 +51,7 @@ export function Navbar() {
         ]
       : []),
   ];
-
   const activePage = (href: string) => (pathname === href ? "page" : undefined);
-
   return (
     <header
       className="sticky top-0 z-40 glass border-b border-border"
@@ -114,7 +109,6 @@ export function Navbar() {
                 {suggestions.map((item) => {
                   const year = item.release_date ? new Date(item.release_date).getFullYear() : "—";
                   const poster = posterUrl(item.poster_path, "w92");
-
                   return (
                     <button
                       key={`${item.media_type}-${item.id}`}
@@ -165,6 +159,7 @@ export function Navbar() {
                   {user.name.charAt(0).toUpperCase()}
                 </div>
                 <span className="hidden max-w-24 truncate font-medium 2xl:inline">{user.name}</span>
+                {user.isDemo && <span className="text-xs font-semibold text-primary">Demo</span>}
               </div>
               <button
                 onClick={async () => {
@@ -189,7 +184,7 @@ export function Navbar() {
               className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-extrabold text-primary-foreground transition-colors hover:bg-primary/90"
             >
               <UserIcon className="size-4" />
-              Login
+              {demoAvailable ? "Demo / Login" : "Login"}
             </Link>
           )}
           <button

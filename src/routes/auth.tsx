@@ -1,31 +1,30 @@
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
-import { PASSWORD_MIN_LENGTH } from "../../shared/auth";
+import { PASSWORD_MIN_LENGTH } from "../../shared/auth-policy";
 import { useAuth } from "@/lib/auth-context";
-import { Link, useNavigate } from "@/lib/navigation";
-
+import { Link } from "@/lib/navigation";
+import { useNavigate, useNavigation } from "@/lib/navigation-context";
 export function AuthPage() {
-  const { signIn, signUp, user } = useAuth();
+  const { signIn, signUp, signInDemo, user, demoAvailable, registrationEnabled } = useAuth();
   const navigate = useNavigate();
+  const demoEntry = useNavigation().pathname === "/demo";
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
+  const [demoLoading, setDemoLoading] = useState(false);
   const resetForm = () => {
     setName("");
     setEmail("");
     setPassword("");
     setErr(null);
   };
-
   useEffect(() => {
     if (user) navigate("/", { replace: true });
   }, [navigate, user]);
-
   useEffect(() => {
     if (!user) {
       resetForm();
@@ -36,7 +35,6 @@ export function AuthPage() {
       }
     }
   }, [user]);
-
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setErr(null);
@@ -50,7 +48,6 @@ export function AuthPage() {
       navigate("/");
     }
   };
-
   return (
     <div className="min-h-[calc(100vh-4rem)] grid place-items-center px-4 py-12">
       <div className="w-full max-w-md">
@@ -59,18 +56,60 @@ export function AuthPage() {
             <BrandLogo className="!w-36" />
           </Link>
           <h1 className="text-3xl font-extrabold tracking-tight">
-            {mode === "login" ? "Willkommen zurück" : "Konto erstellen"}
+            {demoEntry
+              ? "BINGE ausprobieren"
+              : mode === "login"
+                ? "Willkommen zurück"
+                : "Konto erstellen"}
           </h1>
           <p className="text-sm text-muted-foreground mt-2">
-            {mode === "login"
-              ? "Deine Watchlist. Deine Bewertungen. Dein Filmabend."
-              : "Erstelle dein kostenloses BINGE-Konto."}
+            {demoEntry
+              ? "Dein eigener temporärer Zugang."
+              : mode === "login"
+                ? "Deine Watchlist. Deine Bewertungen. Dein Filmabend."
+                : "Erstelle dein kostenloses BINGE-Konto."}
           </p>
         </div>
 
+        {demoAvailable && (
+          <section className="mb-6 border-b border-border pb-6">
+            <button
+              type="button"
+              disabled={loading || demoLoading}
+              onClick={async () => {
+                setErr(null);
+                setDemoLoading(true);
+                const result = await signInDemo();
+                setDemoLoading(false);
+                if (result.error) setErr(result.error);
+                else navigate("/");
+              }}
+              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-primary font-bold text-primary-foreground hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary disabled:opacity-50"
+            >
+              {demoLoading ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Play className="size-4" aria-hidden="true" />
+              )}
+              {demoLoading ? "Demo wird vorbereitet" : "Demo starten"}
+            </button>
+            <p className="mt-3 text-center text-xs text-muted-foreground">
+              Ohne Registrierung. Änderungen bleiben in deinem temporären Demo-Bereich.
+            </p>
+          </section>
+        )}
+
+        {err && (
+          <p
+            role="alert"
+            className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {err}
+          </p>
+        )}
+
         <form
           id="auth-form"
-          autoComplete="off"
           key={user ? "authed" : "guest"}
           onSubmit={submit}
           className="bg-surface border border-border rounded-2xl p-6 space-y-4"
@@ -86,7 +125,7 @@ export function AuthPage() {
               <input
                 id="auth-name"
                 name="name"
-                autoComplete="off"
+                autoComplete="name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 required
@@ -105,7 +144,7 @@ export function AuthPage() {
               id="auth-email"
               name="username"
               type="email"
-              autoComplete="off"
+              autoComplete="username"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
@@ -123,7 +162,7 @@ export function AuthPage() {
               id="auth-password"
               name={mode === "login" ? "current-password" : "new-password"}
               type="password"
-              autoComplete="off"
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               required
@@ -137,14 +176,8 @@ export function AuthPage() {
             )}
           </div>
 
-          {err && (
-            <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">
-              {err}
-            </div>
-          )}
-
           <button
-            disabled={loading}
+            disabled={loading || demoLoading}
             type="submit"
             className="w-full h-11 rounded-lg bg-primary text-primary-foreground font-semibold hover:opacity-90 transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
           >
@@ -152,19 +185,21 @@ export function AuthPage() {
             {mode === "login" ? "Einloggen" : "Konto erstellen"}
           </button>
 
-          <p className="text-center text-sm text-muted-foreground">
-            {mode === "login" ? "Noch kein Konto? " : "Schon registriert? "}
-            <button
-              type="button"
-              onClick={() => {
-                resetForm();
-                setMode(mode === "login" ? "signup" : "login");
-              }}
-              className="text-primary font-semibold hover:underline"
-            >
-              {mode === "login" ? "Registrieren" : "Einloggen"}
-            </button>
-          </p>
+          {registrationEnabled && (
+            <p className="text-center text-sm text-muted-foreground">
+              {mode === "login" ? "Noch kein Konto? " : "Schon registriert? "}
+              <button
+                type="button"
+                onClick={() => {
+                  resetForm();
+                  setMode(mode === "login" ? "signup" : "login");
+                }}
+                className="text-primary font-semibold hover:underline"
+              >
+                {mode === "login" ? "Registrieren" : "Einloggen"}
+              </button>
+            </p>
+          )}
         </form>
 
         <p className="text-center text-xs text-muted-foreground mt-6">

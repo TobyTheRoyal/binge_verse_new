@@ -1,5 +1,19 @@
 # Security and Scalability Review
 
+## Portfolio Readiness Update (2026-10-25)
+
+The older audit below is retained as history. The explicit-`any` debt and Fast Refresh warnings identified there are now resolved: the repository has zero-warning lint, schema-generated GraphQL/resolver contracts and typed TMDB transport objects. Shared hooks/context and UI variants have separate modules. Registration validation loads only when required instead of adding its library to every page.
+
+A one-click demo now creates a distinct, non-privileged temporary visitor identity and revocable session. Every demo personal record carries TTL expiry, including subsequent rating/episode/profile writes. Demo ratings are excluded from real community/neighbor aggregates. Production demo access is opt-in, public signup can be disabled, and separate per-IP and global daily demo limits bound new requests. The local scratch preview uses a different development cookie and never connects to the normal user database.
+
+The deployment template serves frontend/API from one origin with CSP, hashed-asset caching, SPA fallback and explicit startup index preparation. Frontend entry links from external sites remain permitted; API origins still remain restricted. Missing API and asset paths do not return the SPA document.
+
+Verification now covers 30 passing tests with a real, isolated local MongoDB instance and a stub metadata server. The two-visitor flow verifies cross-user/admin denial, saved half-star seasons, their aggregate, next episode, season deletion/recalculation, whole-series rating removal without deleting viewing progress, session persistence/revocation and exclusion of demo ratings from community scores. Browser QA verified desktop/mobile layout, loaded assets and persistence after refresh. History now shows one aggregate card per title instead of duplicate season cards, and touch/keyboard delete controls are accessible.
+
+No public service was provisioned. A Render Free + Atlas Free guide and CI workflow are prepared; cloud deployment, provider account permissions, credential rotation and real Redis multi-instance/outage behavior are not claimed verified. At this update the existing configured MongoDB endpoint could not be reached, so the database regression tests and browser demo used a fresh local scratch database rather than changing existing user records. Commercial-launch work such as email ownership/recovery, transactions, large-library pagination and load testing remains open.
+
+## Earlier Audit
+
 Review dates: 2026-10-21 to 2026-10-22. Scope: local source, dependency audit, isolated automated tests and local application checks. This is a source-level review and hardening pass, not an independent penetration test or a measured capacity guarantee.
 
 ## Findings Addressed

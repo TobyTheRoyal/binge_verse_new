@@ -6,7 +6,7 @@ import { MediaRow } from "./MediaRow";
 
 export function RecommendedRow() {
   const { user } = useAuth();
-  const { items } = useRatings();
+  const { titleItems: items } = useRatings();
   const [recs, setRecs] = useState<MediaItem[]>([]);
 
   const seed = useMemo(() => {

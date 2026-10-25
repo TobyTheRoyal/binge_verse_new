@@ -6,8 +6,7 @@ import { Clapperboard, Loader2, Search, SlidersHorizontal, Tv } from "lucide-rea
 import { MediaCard } from "@/components/MediaCard";
 import { posterUrl } from "@/lib/media-assets";
 import { discoverPage, getGenres, searchMultiPage, type MediaItem } from "@/lib/tmdb.functions";
-import { useNavigate, useSearchParams } from "@/lib/navigation";
-
+import { useNavigate, useSearchParams } from "@/lib/navigation-context";
 const YEARS = Array.from({ length: 50 }, (_, i) => String(new Date().getFullYear() - i));
 const SORTS = [
   { v: "popularity.desc", l: "Beliebtheit" },
@@ -38,7 +37,6 @@ const STREAMING_PROVIDERS_AT = STREAMING_PROVIDERS.map((provider) => ({
   v: provider.id,
   l: "browseName" in provider ? provider.browseName : provider.name,
 }));
-
 export function BrowsePage() {
   const navigate = useNavigate();
   const searchParams = useSearchParams();
@@ -52,15 +50,12 @@ export function BrowsePage() {
   const [text, setText] = useState(q);
   const suggestions = useMediaSuggestions(text);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-
   useEffect(() => setText(q), [q]);
-
   const genresQ = useQuery({
     queryKey: ["genres", type],
     queryFn: () => getGenres({ data: { media: type } }),
     staleTime: 1000 * 60 * 60,
   });
-
   const isSearch = Boolean(q.trim());
   const genreOptions = useMemo(() => {
     const base =
@@ -68,12 +63,9 @@ export function BrowsePage() {
         id: String(genre.id),
         name: genre.id === 10749 ? "Romantik" : genre.name,
       })) ?? [];
-
     if (type !== "tv" || base.some((genre) => genre.name === TV_ROMANCE_GENRE.name)) return base;
-
     return [...base, TV_ROMANCE_GENRE].sort((a, b) => a.name.localeCompare(b.name, "de"));
   }, [genresQ.data, type]);
-
   const resultsQ = useInfiniteQuery({
     queryKey: ["browse", { q, type, genre, year, sort, language, provider }],
     initialPageParam: 1,
@@ -81,7 +73,6 @@ export function BrowsePage() {
       if (isSearch) {
         return searchMultiPage({ data: { query: q, page: pageParam, language } });
       }
-
       return discoverPage({
         data: {
           media: type,
@@ -97,7 +88,6 @@ export function BrowsePage() {
     getNextPageParam: (lastPage) =>
       lastPage.page < lastPage.total_pages ? lastPage.page + 1 : undefined,
   });
-
   const results = useMemo(() => {
     const seen = new Set<string>();
     const items: MediaItem[] = [];
@@ -114,11 +104,9 @@ export function BrowsePage() {
   const hasNextPage = resultsQ.hasNextPage;
   const isFetchingNextPage = resultsQ.isFetchingNextPage;
   const fetchNextPage = resultsQ.fetchNextPage;
-
   useEffect(() => {
     const node = loadMoreRef.current;
     if (!node || !hasNextPage) return;
-
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting && !isFetchingNextPage) {
@@ -130,7 +118,6 @@ export function BrowsePage() {
     observer.observe(node);
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
-
   const update = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams(searchParams);
     for (const [key, value] of Object.entries(patch)) {
@@ -140,17 +127,14 @@ export function BrowsePage() {
     const query = next.toString();
     navigate(`/browse${query ? `?${query}` : ""}`);
   };
-
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     update({ q: text.trim() || undefined });
   };
-
   const heading = useMemo(() => {
     if (isSearch) return `Ergebnisse für "${q}"`;
     return type === "tv" ? "Serien durchstöbern" : "Filme durchstöbern";
   }, [isSearch, q, type]);
-
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-8">
       <div className="space-y-6 border-b border-border pb-6">
@@ -183,7 +167,6 @@ export function BrowsePage() {
                       ? new Date(item.release_date).getFullYear()
                       : "—";
                     const poster = posterUrl(item.poster_path, "w92");
-
                     return (
                       <button
                         key={`${item.media_type}-${item.id}`}

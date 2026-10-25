@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { registrationSchema, PASSWORD_MIN_LENGTH } from "../../shared/auth";
 import { Ctx, type AuthCtx, type User } from "./auth-context";
 
 type UserResponse = {
@@ -9,6 +8,7 @@ type UserResponse = {
   email: string;
   role?: User["role"];
   isAdmin?: boolean;
+  isDemo?: boolean;
 };
 
 function normalizeUser(raw: UserResponse | null | undefined): User | null {
@@ -19,6 +19,7 @@ function normalizeUser(raw: UserResponse | null | undefined): User | null {
     email: raw.email,
     role: raw.role ?? "USER",
     isAdmin: Boolean(raw.isAdmin || raw.role === "ADMIN" || raw.role === "EDITOR"),
+    isDemo: Boolean(raw.isDemo),
   };
 }
 
@@ -26,6 +27,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [demoAvailable, setDemoAvailable] = useState(false);
+  const [registrationEnabled, setRegistrationEnabled] = useState(false);
 
   const loadUser = async () => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -38,6 +41,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         const data = await response.json();
+        setDemoAvailable(Boolean(data.demoEnabled));
+        setRegistrationEnabled(Boolean(data.registrationEnabled));
         setUser(normalizeUser(data.user));
         return;
       } catch {
@@ -59,15 +64,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const trimmedName = name.trim();
     const trimmedEmail = email.trim().toLowerCase();
 
-    if (
-      !registrationSchema.safeParse({ name: trimmedName, email: trimmedEmail, password }).success
-    ) {
-      return {
-        error: `Bitte gültige Kontodaten und ein Passwort mit mindestens ${PASSWORD_MIN_LENGTH} Zeichen (maximal 72 UTF-8-Bytes) eingeben.`,
-      };
-    }
-
     try {
+      const { registrationSchema, PASSWORD_MIN_LENGTH } = await import("../../shared/auth");
+      if (
+        !registrationSchema.safeParse({ name: trimmedName, email: trimmedEmail, password }).success
+      )
+        return {
+          error: `Bitte gültige Kontodaten und ein Passwort mit mindestens ${PASSWORD_MIN_LENGTH} Zeichen (maximal 72 UTF-8-Bytes) eingeben.`,
+        };
       const response = await fetch("/api/register", {
         method: "POST",
         credentials: "include",
@@ -114,6 +118,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const signInDemo: AuthCtx["signInDemo"] = async () => {
+    try {
+      const response = await fetch("/api/demo", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await response.json();
+      if (!response.ok) return { error: data.error ?? "Die Demo konnte nicht gestartet werden." };
+      await queryClient.cancelQueries();
+      queryClient.clear();
+      setUser(normalizeUser(data.user));
+      return {};
+    } catch {
+      return { error: "Die Demo ist gerade nicht erreichbar. Bitte versuche es erneut." };
+    }
+  };
+
   const signOut = async () => {
     const response = await fetch("/api/logout", {
       method: "POST",
@@ -127,5 +150,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  return <Ctx.Provider value={{ user, loading, signUp, signIn, signOut }}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider
+      value={{
+        user,
+        loading,
+        demoAvailable,
+        registrationEnabled,
+        signUp,
+        signIn,
+        signInDemo,
+        signOut,
+      }}
+    >
+      {children}
+    </Ctx.Provider>
+  );
 }

@@ -1,5 +1,15 @@
 import { graphqlClient } from "./graphql";
 import type { MediaType } from "../../shared/catalog";
+import type {
+  MediaItem as ApiMediaItem,
+  MovieDetails,
+  Provider as ApiProvider,
+  Episode,
+  SeasonDetails as ApiSeasonDetails,
+  HomeData,
+  MediaItemConnection,
+  Genre,
+} from "../../shared/api.generated";
 
 export type Media = MediaType;
 
@@ -122,7 +132,22 @@ const MEDIA_FIELDS = `
   }
 `;
 
-function fromMedia(raw: any): MediaItem {
+function fromMedia(
+  raw: Pick<
+    ApiMediaItem,
+    | "id"
+    | "mediaType"
+    | "title"
+    | "posterPath"
+    | "backdropPath"
+    | "overview"
+    | "releaseDate"
+    | "voteAverage"
+    | "voteCount"
+    | "matchScore"
+  > &
+    Partial<Pick<ApiMediaItem, "popularity" | "genreIds">>,
+): MediaItem {
   return {
     id: raw.id,
     media_type: raw.mediaType,
@@ -134,20 +159,20 @@ function fromMedia(raw: any): MediaItem {
     popularity: raw.popularity ?? 0,
     vote_average: raw.voteAverage,
     vote_count: raw.voteCount,
-    genre_ids: raw.genreIds,
+    genre_ids: raw.genreIds ?? [],
     match_score: raw.matchScore ?? null,
   };
 }
 
-function fromProvider(raw: any): Provider {
+function fromProvider(raw: ApiProvider): Provider {
   return {
     provider_id: raw.providerId,
     provider_name: raw.providerName,
-    logo_path: raw.logoPath,
+    logo_path: raw.logoPath ?? null,
   };
 }
 
-function fromDetails(raw: any): MediaDetails {
+function fromDetails(raw: MovieDetails): MediaDetails {
   return {
     ...fromMedia(raw),
     tagline: raw.tagline ?? "",
@@ -156,28 +181,28 @@ function fromDetails(raw: any): MediaDetails {
     number_of_episodes: raw.numberOfEpisodes,
     genres: raw.genres ?? [],
     seasons: (raw.seasons ?? [])
-      .filter((season: any) => Number(season?.seasonNumber ?? season?.season_number ?? 0) !== 0)
-      .map((season: any) => ({
-        season_number: season.seasonNumber ?? season.season_number ?? 0,
-        name: season.name ?? `Staffel ${season.seasonNumber ?? season.season_number ?? ""}`,
+      .filter((season) => season.seasonNumber !== 0)
+      .map((season) => ({
+        season_number: season.seasonNumber,
+        name: season.name,
         overview: season.overview ?? "",
-        poster_path: season.posterPath ?? season.poster_path ?? null,
-        air_date: season.airDate ?? season.air_date ?? null,
-        episode_count: season.episodeCount ?? season.episode_count ?? 0,
+        poster_path: season.posterPath ?? null,
+        air_date: season.airDate ?? null,
+        episode_count: season.episodeCount,
       })),
     imdb_rating: raw.imdbRating,
     rt_rating: raw.rottenTomatoesRating,
     imdb_id: raw.imdbId,
-    cast: (raw.cast ?? []).map((member: any) => ({
+    cast: (raw.cast ?? []).map((member) => ({
       id: member.id,
       name: member.name,
-      character: member.character,
-      profile_path: member.profilePath,
+      character: member.character ?? null,
+      profile_path: member.profilePath ?? null,
     })),
     recommendations: (raw.recommendations ?? []).map(fromMedia),
     watchProviders: raw.watchProviders
       ? {
-          link: raw.watchProviders.link,
+          link: raw.watchProviders.link ?? null,
           region: raw.watchProviders.region,
           flatrate: raw.watchProviders.flatrate.map(fromProvider),
           rent: raw.watchProviders.rent.map(fromProvider),
@@ -191,7 +216,7 @@ function fromDetails(raw: any): MediaDetails {
   };
 }
 
-function fromEpisode(raw: any): EpisodeInfo {
+function fromEpisode(raw: Episode): EpisodeInfo {
   return {
     season_number: raw.seasonNumber,
     episode_number: raw.episodeNumber,
@@ -206,7 +231,7 @@ function fromEpisode(raw: any): EpisodeInfo {
   };
 }
 
-function fromSeasonDetails(raw: any): SeasonDetails {
+function fromSeasonDetails(raw: ApiSeasonDetails): SeasonDetails {
   return {
     season_number: raw.seasonNumber,
     name: raw.name,
@@ -219,7 +244,7 @@ function fromSeasonDetails(raw: any): SeasonDetails {
 }
 
 export async function getHomeData() {
-  const data = await graphqlClient.request<any>(`
+  const data = await graphqlClient.request<{ home: HomeData }>(`
     query Home {
       home {
         featured { ${MEDIA_FIELDS} }
@@ -362,7 +387,7 @@ export async function searchMulti({
 }: {
   data: { query: string; page?: number; language?: string };
 }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ search: ApiMediaItem[] }>(
     `
       query Search($query: String!, $page: Int, $language: String) {
         search(query: $query, page: $page, language: $language) { ${MEDIA_FIELDS} }
@@ -380,7 +405,7 @@ export async function searchMultiPage({
 }: {
   data: { query: string; page?: number; language?: string };
 }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ searchPage: MediaItemConnection }>(
     `
       query SearchPage($query: String!, $page: Int, $language: String) {
         searchPage(query: $query, page: $page, language: $language) {
@@ -410,7 +435,7 @@ export async function searchSuggestions({
   data: { query: string; limit?: number };
   signal?: AbortSignal;
 }) {
-  const result = await graphqlClient.request<any>({
+  const result = await graphqlClient.request<{ searchSuggestions: ApiMediaItem[] }>({
     document: `
       query SearchSuggestions($query: String!, $limit: Int) {
         searchSuggestions(query: $query, limit: $limit) { ${MEDIA_FIELDS} }
@@ -437,7 +462,7 @@ export async function discover({
     provider?: string;
   };
 }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ discover: ApiMediaItem[] }>(
     `
       query Discover($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int, $language: String, $provider: String) {
         discover(media: $media, genre: $genre, year: $year, sort: $sort, page: $page, language: $language, provider: $provider) { ${MEDIA_FIELDS} }
@@ -470,7 +495,7 @@ export async function discoverPage({
     provider?: string;
   };
 }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ discoverPage: MediaItemConnection }>(
     `
       query DiscoverPage($media: MediaType!, $genre: String, $year: String, $sort: String, $page: Int, $language: String, $provider: String) {
         discoverPage(media: $media, genre: $genre, year: $year, sort: $sort, page: $page, language: $language, provider: $provider) {
@@ -501,7 +526,7 @@ export async function discoverPage({
 }
 
 export async function getGenres({ data }: { data: { media: Media } }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ genres: Genre[] }>(
     `
       query Genres($media: MediaType!) {
         genres(media: $media) {
@@ -521,7 +546,7 @@ export async function getDetails({
 }: {
   data: { media: Media; id: number; userId?: string };
 }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ details: MovieDetails }>(
     `
       query Details($media: MediaType!, $id: Int!, $userId: String) {
         details(media: $media, id: $id, userId: $userId) {
@@ -594,7 +619,7 @@ export async function getSeasonDetails({
 }: {
   data: { tvId: number; seasonNumber: number; userId?: string };
 }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ seasonDetails: ApiSeasonDetails }>(
     `
       query SeasonDetails($tvId: Int!, $seasonNumber: Int!, $userId: String) {
         seasonDetails(tvId: $tvId, seasonNumber: $seasonNumber, userId: $userId) {
@@ -626,7 +651,7 @@ export async function getSeasonDetails({
 }
 
 export async function getRecommendationsFor({ data }: { data: { media: Media; id: number } }) {
-  const result = await graphqlClient.request<any>(
+  const result = await graphqlClient.request<{ recommendations: ApiMediaItem[] }>(
     `
       query Recommendations($media: MediaType!, $id: Int!) {
         recommendations(media: $media, id: $id) { ${MEDIA_FIELDS} }

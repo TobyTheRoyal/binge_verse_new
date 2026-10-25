@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-export const PASSWORD_MIN_LENGTH = 15;
-export const PASSWORD_MAX_BYTES = 72;
+import { PASSWORD_MIN_LENGTH, PASSWORD_MAX_BYTES } from "./auth-policy.js";
+export { PASSWORD_MIN_LENGTH, PASSWORD_MAX_BYTES } from "./auth-policy.js";
 const email = z.string().trim().toLowerCase().email().max(254);
 export const registrationSchema = z.object({
   name: z.string().trim().min(1).max(80),

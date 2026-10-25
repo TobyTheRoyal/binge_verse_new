@@ -35,6 +35,29 @@ import type {
 import { validateSavedMedia } from "./validation.js";
 import { PublicError } from "./errors.js";
 import type { WatchProgressDocument } from "./db/models.js";
+import type { AuthContext } from "./auth.js";
+import type {
+  Resolvers,
+  WatchProgressInput,
+  RatingInput,
+  ReleaseEventInput,
+  ReleaseEventPatchInput,
+  ReleaseEventFilterInput,
+} from "../shared/api.generated.js";
+import type {
+  TmdbMedia,
+  TmdbPage,
+  TmdbDetails,
+  TmdbEpisode,
+  TmdbSeason,
+  TmdbProvider,
+} from "./services/tmdb-types.js";
+import type {
+  RatingRecord,
+  SavedRecord,
+  EpisodeProgressRecord,
+  ReleaseEventRecord,
+} from "./db/models.js";
 
 import { createSchema } from "graphql-yoga";
 import mongoose from "mongoose";
@@ -47,25 +70,11 @@ import {
   TasteProfile,
 } from "./db/models.js";
 import { typeDefs } from "./graphql/schema.js";
+import { demoRecordFields } from "./demo/identity.js";
+import { prepareDatabase } from "./db/prepare.js";
 
 type MediaType = import("../shared/catalog.js").MediaType;
 type WatchStatus = import("../shared/catalog.js").WatchStatus;
-type TmdbMedia = {
-  id: number;
-  media_type?: MediaType;
-  original_language?: string;
-  title?: string;
-  name?: string;
-  poster_path?: string | null;
-  backdrop_path?: string | null;
-  overview?: string;
-  release_date?: string | null;
-  first_air_date?: string | null;
-  popularity?: number;
-  vote_average?: number;
-  vote_count?: number;
-  genre_ids?: number[];
-};
 
 type SavedMedia = {
   userId: string;
@@ -77,20 +86,11 @@ type SavedMedia = {
   voteAverage: number;
 };
 
-type TmdbEpisode = {
-  id: number;
-  name?: string;
-  overview?: string;
-  air_date?: string | null;
-  episode_number: number;
-  season_number: number;
-  runtime?: number | null;
-  still_path?: string | null;
-  vote_average?: number;
-};
-
 function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
-  const mediaType = raw.media_type ?? fallbackMedia ?? (raw.title ? "movie" : "tv");
+  const mediaType =
+    (raw.media_type === "movie" || raw.media_type === "tv" ? raw.media_type : null) ??
+    fallbackMedia ??
+    (raw.title ? "movie" : "tv");
 
   return {
     id: raw.id,
@@ -104,6 +104,7 @@ function normalizeMedia(raw: TmdbMedia, fallbackMedia?: MediaType) {
     voteAverage: raw.vote_average ?? 0,
     voteCount: raw.vote_count ?? 0,
     genreIds: raw.genre_ids ?? [],
+    matchScore: null as MatchScoreResult | null,
   };
 }
 
@@ -250,14 +251,18 @@ function matchScoreMeta(score: number | null) {
   return { label: "Low Match", color: "red" };
 }
 
-function mediaDateValue(item: any) {
+function mediaDateValue(item: {
+  releaseDate?: string | null;
+  release_date?: string | null;
+  first_air_date?: string | null;
+}) {
   const value = item.releaseDate ?? item.release_date ?? item.first_air_date ?? null;
   return value ? new Date(value).getTime() || 0 : 0;
 }
 
-function extractStoryThemes(raw: any) {
+function extractStoryThemes(raw: Pick<TmdbDetails, "overview" | "keywords" | "tagline">) {
   const keywords = [
-    ...((raw.keywords?.keywords ?? raw.keywords?.results ?? []) as any[]).map((item) =>
+    ...(raw.keywords?.keywords ?? raw.keywords?.results ?? []).map((item) =>
       String(item.name ?? "").toLowerCase(),
     ),
     String(raw.overview ?? "").toLowerCase(),
@@ -270,23 +275,23 @@ function extractStoryThemes(raw: any) {
 }
 
 async function fetchTasteDetails(mediaType: MediaType, tmdbId: number) {
-  const raw = await tmdb<any>(`/${mediaType}/${tmdbId}`, {
+  const raw = await tmdb<TmdbDetails>(`/${mediaType}/${tmdbId}`, {
     append_to_response: "credits,keywords",
   });
   const crew = raw.credits?.crew ?? [];
   const directors =
     mediaType === "movie"
       ? crew
-          .filter((member: any) => member.job === "Director")
-          .map((member: any) => ({ id: String(member.id), name: member.name }))
-      : (raw.created_by ?? []).map((member: any) => ({ id: String(member.id), name: member.name }));
+          .filter((member) => member.job === "Director")
+          .map((member) => ({ id: String(member.id), name: member.name }))
+      : (raw.created_by ?? []).map((member) => ({ id: String(member.id), name: member.name }));
 
   return {
-    genres: (raw.genres ?? []).map((genre: any) => ({
+    genres: (raw.genres ?? []).map((genre) => ({
       id: Number(genre.id),
       name: genre.id === 10749 ? "Romantik" : genre.name,
     })),
-    cast: (raw.credits?.cast ?? []).slice(0, 8).map((member: any, index: number) => ({
+    cast: (raw.credits?.cast ?? []).slice(0, 8).map((member, index: number) => ({
       id: String(member.id),
       name: member.name,
       weight: index < 3 ? 1 : 0.55,
@@ -361,14 +366,14 @@ async function tasteSourceHash(userId: string) {
   return createHash("sha256")
     .update(
       JSON.stringify({
-        ratings: ratings.map((rating: any) => [
+        ratings: ratings.map((rating) => [
           rating.tmdbId,
           rating.mediaType,
           rating.seasonNumber ?? null,
           rating.rating,
           new Date(rating.updatedAt ?? 0).getTime(),
         ]),
-        progress: progress.map((item: any) => [
+        progress: progress.map((item) => [
           item.tmdbId,
           item.mediaType,
           item.status,
@@ -388,20 +393,20 @@ async function buildTasteProfile(userId: string, force = false): Promise<BuiltTa
   }
 
   const ratings = await Rating.find({ userId }).sort({ updatedAt: -1 }).lean();
-  const usableRatings = ratings.filter((rating: any) => rating.seasonNumber == null);
+  const usableRatings = ratings.filter((rating) => rating.seasonNumber == null);
   const ratingCount = usableRatings.length;
   const averageRating =
-    usableRatings.reduce((sum: number, item: any) => sum + Number(item.rating ?? 0), 0) /
+    usableRatings.reduce((sum: number, item) => sum + Number(item.rating ?? 0), 0) /
     Math.max(ratingCount, 1);
 
-  const genreMap = new Map<string, any>();
-  const actorMap = new Map<string, any>();
-  const directorMap = new Map<string, any>();
-  const storyMap = new Map<string, any>();
+  const genreMap: Parameters<typeof preferenceList>[0] = new Map();
+  const actorMap: Parameters<typeof preferenceList>[0] = new Map();
+  const directorMap: Parameters<typeof preferenceList>[0] = new Map();
+  const storyMap: Parameters<typeof preferenceList>[0] = new Map();
   const mediaTypeCounts = new Map<MediaType, number>();
 
   const details = await Promise.all(
-    usableRatings.slice(0, 80).map(async (rating: any) => {
+    usableRatings.slice(0, 80).map(async (rating) => {
       try {
         return { rating, details: await fetchTasteDetails(rating.mediaType, rating.tmdbId) };
       } catch {
@@ -478,7 +483,11 @@ async function buildTasteProfile(userId: string, force = false): Promise<BuiltTa
   };
 
   if (details.every((entry) => entry.details)) {
-    await TasteProfile.findOneAndUpdate({ userId }, { $set: profile }, { upsert: true, new: true });
+    await TasteProfile.findOneAndUpdate(
+      { userId },
+      { $set: { ...profile, ...demoRecordFields(userId) } },
+      { upsert: true, new: true },
+    );
   }
   return profile;
 }
@@ -685,7 +694,10 @@ function scoreFromProfile(
   };
 }
 
-async function scoreMediaBatchForContext(items: any[], context: any) {
+async function scoreMediaBatchForContext<T extends Parameters<typeof scoreFromProfile>[1]>(
+  items: T[],
+  context: AuthContext,
+) {
   const user = context?.user ?? null;
   if (!user || !hasDb() || !items.length) return items;
   const [profile, socialContext] = await Promise.all([
@@ -702,7 +714,10 @@ async function scoreMediaBatchForContext(items: any[], context: any) {
   }));
 }
 
-async function scoreReleaseEventsForContext(items: any[], context: any) {
+async function scoreReleaseEventsForContext(
+  items: ReturnType<typeof mapReleaseEvent>[],
+  context: AuthContext,
+) {
   const user = context?.user ?? null;
   if (!user || !hasDb() || !items.length) return items;
   const scoreItems = items.map((item) => ({
@@ -734,7 +749,7 @@ const suggestionCache = new LRUCache<
   string,
   { expiresAt: number; items: SearchSuggestionCandidate[] }
 >({ max: config.METADATA_CACHE_MAX, ttl: config.METADATA_CACHE_TTL_MS });
-const seasonCache = new LRUCache<string, { expiresAt: number; data: any }>({
+const seasonCache = new LRUCache<string, { expiresAt: number; data: TmdbSeason }>({
   max: config.METADATA_CACHE_MAX,
   ttl: config.METADATA_CACHE_TTL_MS,
 });
@@ -841,9 +856,9 @@ async function searchTmdbSuggestions(query: string) {
   };
 
   const [multi, movies, tv] = await Promise.all([
-    tmdb<any>("/search/multi", searchParams),
-    tmdb<any>("/search/movie", searchParams),
-    tmdb<any>("/search/tv", searchParams),
+    tmdb<TmdbPage>("/search/multi", searchParams),
+    tmdb<TmdbPage>("/search/movie", searchParams),
+    tmdb<TmdbPage>("/search/tv", searchParams),
   ]);
 
   const seen = new Set<string>();
@@ -859,7 +874,7 @@ async function searchTmdbSuggestions(query: string) {
   ];
 
   const directCandidates = directResults.map((item, index) => ({
-    ...normalizeMedia(item, item.media_type),
+    ...normalizeMedia(item, item.media_type === "tv" ? "tv" : "movie"),
     suggestionSourceRank: index,
   }));
 
@@ -878,19 +893,23 @@ async function searchTmdbSuggestions(query: string) {
   return items;
 }
 
-function toSavedInput(input: any): SavedMedia {
-  return validateSavedMedia(input);
+function toSavedInput(input: unknown): SavedMedia {
+  const saved = validateSavedMedia(input);
+  return { ...saved, ...demoRecordFields(saved.userId) };
 }
 
-function toProgressInput(input: any, userId: string) {
+function toProgressInput(
+  input: Omit<WatchProgressInput, "status"> & { status?: WatchStatus },
+  userId: string,
+) {
   return {
     ...toSavedInput({ ...input, userId }),
-    status: WATCH_STATUSES.includes(input.status) ? input.status : "PLAN_TO_WATCH",
+    status: input.status ?? "PLAN_TO_WATCH",
     totalEpisodes: Number(input.totalEpisodes ?? 0),
   };
 }
 
-function mapEpisode(raw: TmdbEpisode, watched?: any) {
+function mapEpisode(raw: TmdbEpisode, watched?: EpisodeProgressRecord) {
   return {
     seasonNumber: raw.season_number,
     episodeNumber: raw.episode_number,
@@ -916,25 +935,25 @@ async function getSeasonRaw(tvId: number, seasonNumber: number) {
   const cached = seasonCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  const data = await tmdb<any>(`/tv/${tvId}/season/${seasonNumber}`);
+  const data = await tmdb<TmdbSeason>(`/tv/${tvId}/season/${seasonNumber}`);
   seasonCache.set(key, { expiresAt: Date.now() + 1000 * 60 * 30, data });
   return data;
 }
 
 async function getWatchedEpisodeMap(userId: string | null, tmdbId: number) {
-  if (!userId || !hasDb()) return new Map<string, any>();
+  if (!userId || !hasDb()) return new Map<string, EpisodeProgressRecord>();
   const docs = await EpisodeProgress.find({ userId, tmdbId });
-  return new Map(docs.map((doc: any) => [`${doc.seasonNumber}:${doc.episodeNumber}`, doc]));
+  return new Map(docs.map((doc) => [`${doc.seasonNumber}:${doc.episodeNumber}`, doc]));
 }
 
 async function getAvailableEpisodes(tvId: number) {
-  const raw = await tmdb<any>(`/tv/${tvId}`);
+  const raw = await tmdb<TmdbDetails>(`/tv/${tvId}`);
   const seasons = (raw.seasons ?? [])
-    .filter((season: any) => Number(season?.season_number ?? 0) > 0)
-    .sort((a: any, b: any) => Number(a.season_number ?? 0) - Number(b.season_number ?? 0));
+    .filter((season) => Number(season?.season_number ?? 0) > 0)
+    .sort((a, b) => Number(a.season_number ?? 0) - Number(b.season_number ?? 0));
 
   const seasonDetails = await Promise.all(
-    seasons.map((season: any) => getSeasonRaw(tvId, Number(season.season_number))),
+    seasons.map((season) => getSeasonRaw(tvId, Number(season.season_number))),
   );
   return seasonDetails
     .flatMap((season) => (season.episodes ?? []).map((episode: TmdbEpisode) => mapEpisode(episode)))
@@ -942,7 +961,11 @@ async function getAvailableEpisodes(tvId: number) {
     .sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber);
 }
 
-async function enrichWatchProgress(doc: any, includeNextEpisode = false, episodeCount?: number) {
+async function enrichWatchProgress(
+  doc: WatchProgressDocument,
+  includeNextEpisode = false,
+  episodeCount?: number,
+) {
   const watchedEpisodes =
     doc.mediaType === "tv"
       ? (episodeCount ??
@@ -952,7 +975,7 @@ async function enrichWatchProgress(doc: any, includeNextEpisode = false, episode
         : 0;
 
   let totalEpisodes = Number(doc.totalEpisodes ?? 0);
-  let nextEpisode = null;
+  let nextEpisode: ReturnType<typeof mapEpisode> | null = null;
 
   if (includeNextEpisode && doc.mediaType === "tv") {
     try {
@@ -1006,7 +1029,11 @@ async function enrichWatchProgressList(docs: WatchProgressDocument[], includeNex
   );
 }
 
-async function upsertWatchProgress(input: any, userId: string, patch: Record<string, unknown>) {
+async function upsertWatchProgress(
+  input: Parameters<typeof toProgressInput>[0],
+  userId: string,
+  patch: Partial<WatchProgressDocument>,
+) {
   const base = toProgressInput(input, userId);
   const doc = await WatchProgress.findOneAndUpdate(
     { userId, tmdbId: base.tmdbId, mediaType: base.mediaType },
@@ -1023,7 +1050,7 @@ async function upsertWatchProgress(input: any, userId: string, patch: Record<str
   return doc;
 }
 
-function mapSaved(doc: any) {
+function mapSaved(doc: SavedRecord) {
   return {
     id: doc._id.toString(),
     tmdbId: doc.tmdbId,
@@ -1036,7 +1063,7 @@ function mapSaved(doc: any) {
   };
 }
 
-function mapRating(doc: any) {
+function mapRating(doc: RatingRecord) {
   return {
     ...mapSaved(doc),
     seasonNumber: doc.seasonNumber ?? null,
@@ -1045,7 +1072,7 @@ function mapRating(doc: any) {
   };
 }
 
-function mapTasteProfile(profile: BuiltTasteProfile | any) {
+function mapTasteProfile(profile: BuiltTasteProfile) {
   return {
     userId: profile.userId,
     computedAt: new Date(profile.computedAt ?? Date.now()).getTime(),
@@ -1070,13 +1097,13 @@ async function buildBingeStats(userId: string) {
     WatchProgress.find({ userId }).lean(),
     EpisodeProgress.countDocuments({ userId }),
   ]);
-  const titleRatings = ratings.filter((rating: any) => rating.seasonNumber == null);
-  const movieRatings = titleRatings.filter((rating: any) => rating.mediaType === "movie");
-  const seriesRatings = titleRatings.filter((rating: any) => rating.mediaType === "tv");
+  const titleRatings = ratings.filter((rating) => rating.seasonNumber == null);
+  const movieRatings = titleRatings.filter((rating) => rating.mediaType === "movie");
+  const seriesRatings = titleRatings.filter((rating) => rating.mediaType === "tv");
   const watchedMovies = progress.filter(
-    (item: any) => item.mediaType === "movie" && item.status === "COMPLETED",
+    (item) => item.mediaType === "movie" && item.status === "COMPLETED",
   );
-  const watchedSeries = progress.filter((item: any) => item.mediaType === "tv");
+  const watchedSeries = progress.filter((item) => item.mediaType === "tv");
   const ratingDistributionMap = new Map<number, number>();
   for (const rating of titleRatings) {
     const bucket = Math.round(Number(rating.rating ?? 0) * 2) / 2;
@@ -1085,7 +1112,7 @@ async function buildBingeStats(userId: string) {
   const movieMinutes = watchedMovies.length * 105;
   const seriesMinutes = episodeCount * 42;
   const averageRating =
-    titleRatings.reduce((sum: number, item: any) => sum + Number(item.rating ?? 0), 0) /
+    titleRatings.reduce((sum: number, item) => sum + Number(item.rating ?? 0), 0) /
     Math.max(titleRatings.length, 1);
 
   return {
@@ -1102,8 +1129,8 @@ async function buildBingeStats(userId: string) {
       .map(([rating, count]) => ({ rating, count })),
     topRatedMovies: movieRatings.slice(0, 10).map(mapRating),
     topRatedSeries: seriesRatings.slice(0, 10).map(mapRating),
-    completedSeries: watchedSeries.filter((item: any) => item.status === "COMPLETED").length,
-    watchingSeries: watchedSeries.filter((item: any) => item.status === "WATCHING").length,
+    completedSeries: watchedSeries.filter((item) => item.status === "COMPLETED").length,
+    watchingSeries: watchedSeries.filter((item) => item.status === "WATCHING").length,
   };
 }
 
@@ -1126,20 +1153,18 @@ async function personalizedRecommendationSections(
 
   const watched = await WatchProgress.find({ userId }).select("tmdbId mediaType status").lean();
   const rated = await Rating.find({ userId, seasonNumber: null }).select("tmdbId mediaType").lean();
-  const blocked = new Set(
-    [...watched, ...rated].map((item: any) => `${item.mediaType}:${item.tmdbId}`),
-  );
+  const blocked = new Set([...watched, ...rated].map((item) => `${item.mediaType}:${item.tmdbId}`));
   const topGenres = profile.genrePreferences
     .filter((genre) => genre.score >= 60)
     .slice(0, 3)
     .map((genre) => genre.id)
     .filter((id) => /^\d+$/.test(id));
   const targets: MediaType[] = mediaType ? [mediaType] : ["movie", "tv"];
-  const candidates: any[] = [];
+  const candidates: NormalizedMedia[] = [];
 
   for (const target of targets) {
     const genre = topGenres[0];
-    const result = await tmdb<any>(`/discover/${target}`, {
+    const result = await tmdb<TmdbPage>(`/discover/${target}`, {
       sort_by: "popularity.desc",
       with_genres: genre,
       page: 1,
@@ -1148,7 +1173,7 @@ async function personalizedRecommendationSections(
     candidates.push(
       ...(result.results ?? [])
         .map((item: TmdbMedia) => normalizeMedia(item, target))
-        .filter((item: any) => item.posterPath && !blocked.has(`${item.mediaType}:${item.id}`)),
+        .filter((item) => item.posterPath && !blocked.has(`${item.mediaType}:${item.id}`)),
     );
   }
 
@@ -1205,7 +1230,7 @@ async function syncSeriesRatingFromSeasons(userId: string, tmdbId: number) {
     seasonNumber: { $ne: null },
   }).sort({ seasonNumber: 1 });
 
-  const rating = averageRating(seasonRatings.map((entry: any) => Number(entry.rating)));
+  const rating = averageRating(seasonRatings.map((entry) => Number(entry.rating)));
   if (rating == null) {
     await Rating.deleteOne({ userId, tmdbId, mediaType: "tv", seasonNumber: null });
     return null;
@@ -1225,13 +1250,14 @@ async function syncSeriesRatingFromSeasons(userId: string, tmdbId: number) {
         releaseDate: source.releaseDate ?? null,
         voteAverage: source.voteAverage ?? 0,
         rating,
+        ...demoRecordFields(userId),
       },
     },
     { upsert: true, new: true },
   );
 }
 
-async function markMovieCompletedFromRating(input: any, userId: string) {
+async function markMovieCompletedFromRating(input: RatingInput, userId: string) {
   return upsertWatchProgress({ ...input, status: "COMPLETED", totalEpisodes: 1 }, userId, {
     status: "COMPLETED",
     totalEpisodes: 1,
@@ -1239,7 +1265,7 @@ async function markMovieCompletedFromRating(input: any, userId: string) {
   });
 }
 
-async function markSeasonCompletedFromRating(input: any, userId: string) {
+async function markSeasonCompletedFromRating(input: RatingInput, userId: string) {
   const seasonNumber = Number(input.seasonNumber);
   if (!Number.isFinite(seasonNumber)) return null;
 
@@ -1275,6 +1301,7 @@ async function markSeasonCompletedFromRating(input: any, userId: string) {
           runtime: episode.runtime ?? null,
           stillPath: episode.stillPath ?? null,
           watchedAt,
+          ...demoRecordFields(userId),
         },
       },
       upsert: true,
@@ -1311,6 +1338,7 @@ async function connectDb() {
       serverSelectionTimeoutMS: config.DATABASE_MAX_TIME_MS,
       autoIndex: !config.isProduction,
     });
+    if (config.RUN_MIGRATIONS) await prepareDatabase();
     console.log("MongoDB connected");
   } catch (error) {
     if (config.isProduction) throw new Error("MongoDB connection failed during startup.");
@@ -1331,30 +1359,30 @@ function assertDb() {
   }
 }
 
-const resolvers = {
+const resolvers: Resolvers = {
   Query: {
-    me: async (_root: unknown, _args: any, context: any) => {
+    me: async (_root: unknown, _args, context) => {
       const user = context?.user ?? null;
       if (!user) return null;
       return getUserProfile(user);
     },
-    home: async (_root: unknown, _args: any, context: any) => {
+    home: async (_root: unknown, _args, context) => {
       const [trendDay, trendMovie, trendTv, popMovie, popTv, topMovie, topTv] = await Promise.all([
-        tmdb<any>("/trending/all/day"),
-        tmdb<any>("/trending/movie/week"),
-        tmdb<any>("/trending/tv/week"),
-        tmdb<any>("/movie/popular"),
-        tmdb<any>("/tv/popular"),
-        tmdb<any>("/movie/top_rated"),
-        tmdb<any>("/tv/top_rated"),
+        tmdb<TmdbPage>("/trending/all/day"),
+        tmdb<TmdbPage>("/trending/movie/week"),
+        tmdb<TmdbPage>("/trending/tv/week"),
+        tmdb<TmdbPage>("/movie/popular"),
+        tmdb<TmdbPage>("/tv/popular"),
+        tmdb<TmdbPage>("/movie/top_rated"),
+        tmdb<TmdbPage>("/tv/top_rated"),
       ]);
 
-      const pick = (result: any, fallback?: MediaType) =>
+      const pick = (result: TmdbPage, fallback?: MediaType) =>
         (result.results ?? [])
           .map((item: TmdbMedia) => normalizeMedia(item, fallback))
-          .filter((item: any) => item.posterPath);
+          .filter((item) => item.posterPath);
 
-      const sortHomeItems = (items: any[]) =>
+      const sortHomeItems = (items: NormalizedMedia[]) =>
         [...items].sort((a, b) => {
           const popularityDelta = Number(b.popularity ?? 0) - Number(a.popularity ?? 0);
           if (popularityDelta !== 0) return popularityDelta;
@@ -1368,7 +1396,7 @@ const resolvers = {
 
       const trending = sortHomeItems(pick(trendDay));
       const featured =
-        trending.find((item: any) => item.backdropPath && item.overview) ?? trending[0] ?? null;
+        trending.find((item) => item.backdropPath && item.overview) ?? trending[0] ?? null;
 
       const homeData = {
         featured,
@@ -1410,23 +1438,23 @@ const resolvers = {
         topTv: scoredGroups[7],
       };
     },
-    discover: async (_: unknown, args: any, context: any) => {
+    discover: async (_: unknown, args, context) => {
       const params = discoverParameters(args);
 
-      const result = await tmdb<any>(`/discover/${args.media}`, params);
+      const result = await tmdb<TmdbPage>(`/discover/${args.media}`, params);
       const items = (result.results ?? [])
         .map((item: TmdbMedia) => normalizeMedia(item, args.media))
-        .filter((item: any) => item.posterPath);
+        .filter((item) => item.posterPath);
       return scoreMediaBatchForContext(items, context);
     },
-    discoverPage: async (_: unknown, args: any, context: any) => {
+    discoverPage: async (_: unknown, args, context) => {
       const page = Math.max(1, Number(args.page ?? 1));
       const params = discoverParameters(args);
 
-      const result = await tmdb<any>(`/discover/${args.media}`, params);
+      const result = await tmdb<TmdbPage>(`/discover/${args.media}`, params);
       const items = (result.results ?? [])
         .map((item: TmdbMedia) => normalizeMedia(item, args.media))
-        .filter((item: any) => item.posterPath);
+        .filter((item) => item.posterPath);
       return {
         results: await scoreMediaBatchForContext(items, context),
         page: result.page ?? page,
@@ -1434,9 +1462,9 @@ const resolvers = {
         totalResults: Number(result.total_results ?? 0),
       };
     },
-    search: async (_: unknown, args: any, context: any) => {
+    search: async (_: unknown, args, context) => {
       if (!args.query.trim()) return [];
-      const result = await tmdb<any>("/search/multi", {
+      const result = await tmdb<TmdbPage>("/search/multi", {
         query: args.query,
         page: args.page ?? 1,
         include_adult: false,
@@ -1449,15 +1477,15 @@ const resolvers = {
             (!args.language || item.original_language === args.language),
         )
         .map((item: TmdbMedia) => normalizeMedia(item))
-        .filter((item: any) => item.posterPath);
+        .filter((item) => item.posterPath);
       return scoreMediaBatchForContext(items, context);
     },
-    searchPage: async (_: unknown, args: any, context: any) => {
+    searchPage: async (_: unknown, args, context) => {
       if (!args.query.trim()) {
         return { results: [], page: 1, totalPages: 1, totalResults: 0 };
       }
       const page = Math.max(1, Number(args.page ?? 1));
-      const result = await tmdb<any>("/search/multi", {
+      const result = await tmdb<TmdbPage>("/search/multi", {
         query: args.query,
         page,
         include_adult: false,
@@ -1471,7 +1499,7 @@ const resolvers = {
         results: await scoreMediaBatchForContext(
           filteredResults
             .map((item: TmdbMedia) => normalizeMedia(item))
-            .filter((item: any) => item.posterPath),
+            .filter((item) => item.posterPath),
           context,
         ),
         page: result.page ?? page,
@@ -1479,7 +1507,7 @@ const resolvers = {
         totalResults: Number(result.total_results ?? 0),
       };
     },
-    searchSuggestions: async (_: unknown, args: any) => {
+    searchSuggestions: async (_: unknown, args) => {
       const query = args.query.trim();
       if (query.length < 2) return [];
 
@@ -1487,17 +1515,19 @@ const resolvers = {
       const results = await searchTmdbSuggestions(query);
       return rankSearchSuggestions(results, query).slice(0, limit);
     },
-    genres: async (_: unknown, args: any) => {
-      const result = await tmdb<any>(`/genre/${args.media}/list`);
+    genres: async (_: unknown, args) => {
+      const result = await tmdb<{ genres: { id: number; name: string }[] }>(
+        `/genre/${args.media}/list`,
+      );
       return result.genres ?? [];
     },
-    details: async (_: unknown, args: any, context: any) => {
+    details: async (_: unknown, args, context) => {
       const authUser = context?.user ?? null;
       if (args.userId && authUser && args.userId !== authUser.id) {
         throw new PublicError("Unauthorized.");
       }
 
-      const raw = await tmdb<any>(`/${args.media}/${args.id}`, {
+      const raw = await tmdb<TmdbDetails>(`/${args.media}/${args.id}`, {
         append_to_response: "credits,recommendations,videos,watch/providers,external_ids",
       });
 
@@ -1507,7 +1537,7 @@ const resolvers = {
       const regionKey = providers[WATCH_REGION] ? WATCH_REGION : null;
       const region = regionKey ? providers[regionKey] : null;
       const trailer = (raw.videos?.results ?? []).find(
-        (video: any) =>
+        (video) =>
           video.site === "YouTube" && (video.type === "Trailer" || video.type === "Teaser"),
       );
 
@@ -1536,16 +1566,16 @@ const resolvers = {
         genres: raw.genres ?? [],
         voteAverage: raw.vote_average ?? 0,
         popularity: raw.popularity ?? 0,
-        cast: (raw.credits?.cast ?? []).slice(0, 8).map((member: any) => ({
+        cast: (raw.credits?.cast ?? []).slice(0, 8).map((member) => ({
           id: String(member.id),
           name: member.name,
         })),
         directors:
           args.media === "movie"
             ? (raw.credits?.crew ?? [])
-                .filter((member: any) => member.job === "Director")
-                .map((member: any) => ({ id: String(member.id), name: member.name }))
-            : (raw.created_by ?? []).map((member: any) => ({
+                .filter((member) => member.job === "Director")
+                .map((member) => ({ id: String(member.id), name: member.name }))
+            : (raw.created_by ?? []).map((member) => ({
                 id: String(member.id),
                 name: member.name,
               })),
@@ -1566,7 +1596,7 @@ const resolvers = {
           : null;
       const recommendationItems = (raw.recommendations?.results ?? [])
         .map((item: TmdbMedia) => normalizeMedia(item, args.media))
-        .filter((item: any) => item.posterPath)
+        .filter((item) => item.posterPath)
         .slice(0, 20);
 
       return {
@@ -1583,30 +1613,30 @@ const resolvers = {
         numberOfEpisodes: raw.number_of_episodes ?? null,
         genres: raw.genres ?? [],
         seasons: (raw.seasons ?? [])
-          .filter((season: any) => Number(season?.season_number ?? season?.seasonNumber ?? 0) !== 0)
-          .map((season: any) => ({
-            seasonNumber: season.season_number ?? season.seasonNumber ?? 0,
-            name: season.name ?? `Staffel ${season.season_number ?? season.seasonNumber ?? ""}`,
+          .filter((season) => Number(season.season_number) !== 0)
+          .map((season) => ({
+            seasonNumber: season.season_number,
+            name: season.name ?? `Staffel ${season.season_number}`,
             overview: season.overview ?? "",
-            posterPath: season.poster_path ?? season.posterPath ?? null,
-            airDate: season.air_date ?? season.airDate ?? null,
-            episodeCount: season.episode_count ?? season.episodeCount ?? 0,
+            posterPath: season.poster_path ?? null,
+            airDate: season.air_date ?? null,
+            episodeCount: season.episode_count ?? 0,
           })),
         voteAverage: raw.vote_average ?? 0,
         voteCount: raw.vote_count ?? 0,
         imdbId,
         ...externalRatings,
-        cast: (raw.credits?.cast ?? []).slice(0, 12).map((member: any) => ({
+        cast: (raw.credits?.cast ?? []).slice(0, 12).map((member) => ({
           id: member.id,
           name: member.name,
-          character: member.character,
+          character: member.character ?? null,
           profilePath: member.profile_path ?? null,
         })),
         recommendations: await scoreMediaBatchForContext(recommendationItems, context),
         watchProviders: region
           ? {
               link: region.link ?? null,
-              region: regionKey,
+              region: WATCH_REGION,
               flatrate: (region.flatrate ?? []).map(mapProvider),
               rent: (region.rent ?? []).map(mapProvider),
               buy: (region.buy ?? []).map(mapProvider),
@@ -1618,27 +1648,27 @@ const resolvers = {
         matchScore: detailMatchScore,
       };
     },
-    recommendations: async (_: unknown, args: any) => {
-      const result = await tmdb<any>(`/${args.media}/${args.id}/recommendations`);
+    recommendations: async (_: unknown, args) => {
+      const result = await tmdb<TmdbPage>(`/${args.media}/${args.id}/recommendations`);
       return (result.results ?? [])
         .map((item: TmdbMedia) => normalizeMedia(item, args.media))
-        .filter((item: any) => item.posterPath);
+        .filter((item) => item.posterPath);
     },
-    watchlist: async (_: unknown, args: any, context: any) => {
+    watchlist: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return [];
       return WatchlistItem.find({ userId })
         .sort({ createdAt: -1 })
         .then((docs) => docs.map(mapSaved));
     },
-    ratings: async (_: unknown, args: any, context: any) => {
+    ratings: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return [];
       return Rating.find({ userId })
         .sort({ updatedAt: -1 })
         .then((docs) => docs.map(mapRating));
     },
-    seasonDetails: async (_: unknown, args: any, context: any) => {
+    seasonDetails: async (_: unknown, args, context) => {
       const authUser = context?.user ?? null;
       if (args.userId && authUser && args.userId !== authUser.id) {
         throw new PublicError("Unauthorized.");
@@ -1660,7 +1690,7 @@ const resolvers = {
         episodes,
       };
     },
-    watchProgress: async (_: unknown, args: any, context: any) => {
+    watchProgress: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return null;
       const doc = await WatchProgress.findOne({
@@ -1670,7 +1700,7 @@ const resolvers = {
       });
       return doc ? enrichWatchProgress(doc, true) : null;
     },
-    watchProgressList: async (_: unknown, args: any, context: any) => {
+    watchProgressList: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return [];
       const filter: Record<string, unknown> = { userId };
@@ -1679,7 +1709,7 @@ const resolvers = {
       const docs = await WatchProgress.find(filter).sort({ lastActivityAt: -1 });
       return enrichWatchProgressList(docs);
     },
-    continueWatching: async (_: unknown, args: any, context: any) => {
+    continueWatching: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return [];
       const docs = await WatchProgress.find({ userId, mediaType: "tv", status: "WATCHING" })
@@ -1688,21 +1718,25 @@ const resolvers = {
       const progress = await enrichWatchProgressList(docs, true);
       return progress.filter((item) => item.nextEpisode);
     },
-    tasteProfile: async (_: unknown, args: any, context: any) => {
+    tasteProfile: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId ?? null);
       return mapTasteProfile(await buildTasteProfile(userId));
     },
-    bingeStats: async (_: unknown, args: any, context: any) => {
+    bingeStats: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId ?? null);
       return buildBingeStats(userId);
     },
-    personalizedRecommendations: async (_: unknown, args: any, context: any) => {
+    personalizedRecommendations: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId ?? null);
-      return personalizedRecommendationSections(userId, args.mediaType, Number(args.limit ?? 12));
+      return personalizedRecommendationSections(
+        userId,
+        args.mediaType ?? undefined,
+        Number(args.limit ?? 12),
+      );
     },
-    matchScores: async (_: unknown, args: any, context: any) => {
+    matchScores: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId ?? null);
-      const scoreItems = (args.items ?? []).map((item: any) => ({
+      const scoreItems = (args.items ?? []).map((item) => ({
         id: item.tmdbId,
         mediaType: item.mediaType,
         title: item.title ?? "",
@@ -1715,7 +1749,7 @@ const resolvers = {
         buildTasteProfile(userId),
         buildMatchSocialContext(userId, scoreItems),
       ]);
-      return scoreItems.map((item: any) =>
+      return scoreItems.map((item) =>
         scoreFromProfile(
           profile,
           {
@@ -1725,7 +1759,7 @@ const resolvers = {
         ),
       );
     },
-    matchExplanation: async (_: unknown, args: any, context: any) => {
+    matchExplanation: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId ?? null);
       const scoreItem = {
         id: args.item.tmdbId,
@@ -1748,7 +1782,7 @@ const resolvers = {
         socialContext.signals.get(getMatchItemKey(scoreItem) ?? ""),
       );
     },
-    releaseEvents: async (_: unknown, args: any, context: any) => {
+    releaseEvents: async (_: unknown, args, context) => {
       if (!hasDb()) return { items: [], total: 0 };
       const filterArgs = args.filter ?? {};
       const filter = buildReleaseFilter(filterArgs, true);
@@ -1766,7 +1800,7 @@ const resolvers = {
           ? await WatchlistItem.find({ userId: authUser.id }).select("tmdbId mediaType")
           : [];
       const watchlistMatches = new Set(
-        watchlistDocs.map((doc: any) => `${doc.mediaType}-${doc.tmdbId}`),
+        watchlistDocs.map((doc) => `${doc.mediaType}-${doc.tmdbId}`),
       );
       const [items, total] = await Promise.all([
         ReleaseEvent.find(filter).sort(sort).skip(offset).limit(limit),
@@ -1780,7 +1814,7 @@ const resolvers = {
         total,
       };
     },
-    releaseEventsByTitle: async (_: unknown, args: any, context: any) => {
+    releaseEventsByTitle: async (_: unknown, args, context) => {
       if (!hasDb()) return [];
       const filter: Record<string, unknown> = {
         tmdbId: args.tmdbId,
@@ -1806,12 +1840,12 @@ const resolvers = {
         context,
       );
     },
-    watchlistReleaseEvents: async (_: unknown, args: any, context: any) => {
+    watchlistReleaseEvents: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId);
       if (!hasDb()) return [];
       const saved = await WatchlistItem.find({ userId }).select("tmdbId mediaType");
       if (!saved.length) return [];
-      const pairs = saved.map((item: any) => ({ tmdbId: item.tmdbId, mediaType: item.mediaType }));
+      const pairs = saved.map((item) => ({ tmdbId: item.tmdbId, mediaType: item.mediaType }));
       const filter = {
         publicationStatus: "PUBLISHED",
         region: String(args.region ?? WATCH_REGION).toUpperCase(),
@@ -1820,13 +1854,13 @@ const resolvers = {
       const docs = await ReleaseEvent.find(filter)
         .sort({ releaseDate: 1, releaseYear: 1, releaseMonth: 1 })
         .limit(20);
-      const matches = new Set(saved.map((item: any) => `${item.mediaType}-${item.tmdbId}`));
+      const matches = new Set(saved.map((item) => `${item.mediaType}-${item.tmdbId}`));
       return scoreReleaseEventsForContext(
         docs.map((doc) => mapReleaseEvent(doc, matches)),
         context,
       );
     },
-    adminReleaseEvents: async (_: unknown, args: any, context: any) => {
+    adminReleaseEvents: async (_: unknown, args, context) => {
       await requireAdmin(context);
       if (!hasDb()) return { items: [], total: 0 };
       const filterArgs = args.filter ?? {};
@@ -1841,7 +1875,7 @@ const resolvers = {
       ]);
       return { items: items.map((doc) => mapReleaseEvent(doc)), total };
     },
-    adminReleaseStats: async (_: unknown, _args: any, context: any) => {
+    adminReleaseStats: async (_: unknown, _args, context) => {
       await requireAdmin(context);
       if (!hasDb()) {
         return {
@@ -1877,25 +1911,25 @@ const resolvers = {
     },
   },
   Mutation: {
-    register: async (_root: unknown, args: any, context: any) => {
+    register: async (_root: unknown, args, context) => {
       const user = await registerUser(args.input);
       await setAuthCookie(context.response, user, context.request);
       return { user };
     },
-    login: async (_root: unknown, args: any, context: any) => {
+    login: async (_root: unknown, args, context) => {
       const user = await loginUser(args.input);
       await setAuthCookie(context.response, user, context.request);
       return { user };
     },
-    logout: async (_root: unknown, _args: any, context: any) => {
+    logout: async (_root: unknown, _args, context) => {
       await clearAuthCookie(context.response, context.request);
       return true;
     },
-    recomputeTasteProfile: async (_: unknown, args: any, context: any) => {
+    recomputeTasteProfile: async (_: unknown, args, context) => {
       const userId = authorizeUser(context, args.userId ?? null);
       return mapTasteProfile(await buildTasteProfile(userId, true));
     },
-    addWatchlist: async (_: unknown, args: any, context: any) => {
+    addWatchlist: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.input.userId ?? null);
       const input = toSavedInput({ ...args.input, userId });
@@ -1906,13 +1940,13 @@ const resolvers = {
       );
       return mapSaved(doc);
     },
-    removeWatchlist: async (_: unknown, args: any, context: any) => {
+    removeWatchlist: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.userId);
       await WatchlistItem.deleteOne({ userId, tmdbId: args.tmdbId, mediaType: args.mediaType });
       return true;
     },
-    rateMovie: async (_: unknown, args: any, context: any) => {
+    rateMovie: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.input.userId ?? null);
       const input = {
@@ -1954,22 +1988,23 @@ const resolvers = {
       invalidateSocialMatches(userId);
       return mapRating(doc);
     },
-    removeRating: async (_: unknown, args: any, context: any) => {
+    removeRating: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.userId);
-      await Rating.deleteOne({
+      const filter = {
         userId,
         tmdbId: args.tmdbId,
         mediaType: args.mediaType,
-        seasonNumber: args.seasonNumber ?? null,
-      });
+      };
+      if (args.mediaType === "tv" && args.seasonNumber == null) await Rating.deleteMany(filter);
+      else await Rating.deleteOne({ ...filter, seasonNumber: args.seasonNumber ?? null });
       if (args.mediaType === "tv" && args.seasonNumber != null) {
         await syncSeriesRatingFromSeasons(userId, args.tmdbId);
       }
       invalidateSocialMatches(userId);
       return true;
     },
-    setWatchStatus: async (_: unknown, args: any, context: any) => {
+    setWatchStatus: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.input.userId ?? null);
       const input = toProgressInput(args.input, userId);
@@ -1989,7 +2024,7 @@ const resolvers = {
       }
       return enrichWatchProgress(doc, true);
     },
-    removeWatchProgress: async (_: unknown, args: any, context: any) => {
+    removeWatchProgress: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.userId);
       await Promise.all([
@@ -2000,7 +2035,7 @@ const resolvers = {
       ]);
       return true;
     },
-    setEpisodeWatched: async (_: unknown, args: any, context: any) => {
+    setEpisodeWatched: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.input.userId ?? null);
       const input = args.input;
@@ -2028,6 +2063,7 @@ const resolvers = {
               runtime: input.runtime ?? null,
               stillPath: input.stillPath ?? null,
               watchedAt: new Date(),
+              ...demoRecordFields(userId),
             },
           },
           { upsert: true, new: true },
@@ -2054,11 +2090,11 @@ const resolvers = {
       );
       return enrichWatchProgress(doc, true);
     },
-    setSeasonWatched: async (_: unknown, args: any, context: any) => {
+    setSeasonWatched: async (_: unknown, args, context) => {
       assertDb();
       const userId = authorizeUser(context, args.input.userId ?? null);
       const input = args.input;
-      const episodeFilters = (input.episodes ?? []).map((episode: any) => ({
+      const episodeFilters = (input.episodes ?? []).map((episode) => ({
         userId,
         tmdbId: input.tmdbId,
         seasonNumber: input.seasonNumber,
@@ -2066,7 +2102,7 @@ const resolvers = {
       }));
 
       if (input.watched) {
-        const operations = (input.episodes ?? []).map((episode: any) => ({
+        const operations = (input.episodes ?? []).map((episode) => ({
           updateOne: {
             filter: {
               userId,
@@ -2089,6 +2125,7 @@ const resolvers = {
                 runtime: episode.runtime ?? null,
                 stillPath: episode.stillPath ?? null,
                 watchedAt: new Date(),
+                ...demoRecordFields(userId),
               },
             },
             upsert: true,
@@ -2114,7 +2151,7 @@ const resolvers = {
       );
       return enrichWatchProgress(doc, true);
     },
-    createReleaseEvent: async (_: unknown, args: any, context: any) => {
+    createReleaseEvent: async (_: unknown, args, context) => {
       assertDb();
       const admin = await requireAdmin(context);
       const input = normalizeReleaseInput(args.input, admin.id);
@@ -2125,12 +2162,13 @@ const resolvers = {
           { $set: { ...input, createdBy: duplicate.createdBy } },
           { new: true },
         );
+        if (!doc) throw new PublicError("Release nicht gefunden.");
         return mapReleaseEvent(doc);
       }
       const doc = await ReleaseEvent.create(input);
       return mapReleaseEvent(doc);
     },
-    updateReleaseEvent: async (_: unknown, args: any, context: any) => {
+    updateReleaseEvent: async (_: unknown, args, context) => {
       assertDb();
       const admin = await requireAdmin(context);
       const existing = await ReleaseEvent.findById(args.id);
@@ -2143,15 +2181,16 @@ const resolvers = {
       const duplicate = await ReleaseEvent.findOne(releaseDuplicateFilter(input, args.id));
       if (duplicate) throw new PublicError("Dieser Release existiert bereits.");
       const doc = await ReleaseEvent.findByIdAndUpdate(args.id, { $set: input }, { new: true });
+      if (!doc) throw new PublicError("Release nicht gefunden.");
       return mapReleaseEvent(doc);
     },
-    deleteReleaseEvent: async (_: unknown, args: any, context: any) => {
+    deleteReleaseEvent: async (_: unknown, args, context) => {
       assertDb();
       await requireAdmin(context);
       await ReleaseEvent.findByIdAndDelete(args.id);
       return true;
     },
-    bulkCreateReleaseEvents: async (_: unknown, args: any, context: any) => {
+    bulkCreateReleaseEvents: async (_: unknown, args, context) => {
       assertDb();
       const admin = await requireAdmin(context);
       const created = [];
@@ -2163,7 +2202,7 @@ const resolvers = {
       }
       return created.map((doc) => mapReleaseEvent(doc));
     },
-    bulkUpdateReleaseEvents: async (_: unknown, args: any, context: any) => {
+    bulkUpdateReleaseEvents: async (_: unknown, args, context) => {
       assertDb();
       const admin = await requireAdmin(context);
       const docs = [];
@@ -2182,7 +2221,7 @@ const resolvers = {
       }
       return docs.map((doc) => mapReleaseEvent(doc));
     },
-    bulkDeleteReleaseEvents: async (_: unknown, args: any, context: any) => {
+    bulkDeleteReleaseEvents: async (_: unknown, args, context) => {
       assertDb();
       await requireAdmin(context);
       await ReleaseEvent.deleteMany({ _id: { $in: args.ids ?? [] } });
@@ -2191,7 +2230,7 @@ const resolvers = {
   },
 };
 
-function mapProvider(provider: any) {
+function mapProvider(provider: TmdbProvider) {
   return {
     providerId: provider.provider_id,
     providerName: provider.provider_name,
@@ -2199,12 +2238,13 @@ function mapProvider(provider: any) {
   };
 }
 
-function normalizeReleaseDateParts(input: any) {
-  const datePrecision: DatePrecision = DATE_PRECISIONS.includes(input.datePrecision)
-    ? input.datePrecision
-    : input.releaseDate
-      ? "EXACT"
-      : "UNKNOWN";
+function normalizeReleaseDateParts(input: ReleaseEventPatchInput) {
+  const datePrecision: DatePrecision =
+    input.datePrecision && DATE_PRECISIONS.includes(input.datePrecision)
+      ? input.datePrecision
+      : input.releaseDate
+        ? "EXACT"
+        : "UNKNOWN";
   const releaseDate =
     datePrecision === "EXACT" && input.releaseDate ? String(input.releaseDate) : null;
   const parsedDate = releaseDate ? new Date(`${releaseDate}T00:00:00.000Z`) : null;
@@ -2242,20 +2282,23 @@ function normalizeReleaseDateParts(input: any) {
   };
 }
 
-function normalizeReleaseInput(input: any, adminId: string, existing?: any) {
-  const releaseType: ReleaseType = RELEASE_TYPES.includes(input.releaseType)
-    ? input.releaseType
-    : "MOVIE_CATALOG";
-  const publicationStatus: PublicationStatus = PUBLICATION_STATUSES.includes(
-    input.publicationStatus,
-  )
-    ? input.publicationStatus
-    : "DRAFT";
-  const confirmationStatus: ConfirmationStatus = CONFIRMATION_STATUSES.includes(
-    input.confirmationStatus,
-  )
-    ? input.confirmationStatus
-    : "ANNOUNCED";
+function normalizeReleaseInput(
+  input: ReleaseEventPatchInput,
+  adminId: string,
+  existing?: ReleaseEventRecord,
+) {
+  const releaseType: ReleaseType =
+    input.releaseType && RELEASE_TYPES.includes(input.releaseType)
+      ? input.releaseType
+      : "MOVIE_CATALOG";
+  const publicationStatus: PublicationStatus =
+    input.publicationStatus && PUBLICATION_STATUSES.includes(input.publicationStatus)
+      ? input.publicationStatus
+      : "DRAFT";
+  const confirmationStatus: ConfirmationStatus =
+    input.confirmationStatus && CONFIRMATION_STATUSES.includes(input.confirmationStatus)
+      ? input.confirmationStatus
+      : "ANNOUNCED";
   const dateParts = normalizeReleaseDateParts(input);
   const provider = String(input.provider ?? existing?.provider ?? "").trim();
   const region = String(input.region ?? existing?.region ?? WATCH_REGION)
@@ -2288,13 +2331,16 @@ function normalizeReleaseInput(input: any, adminId: string, existing?: any) {
     episodeNumber: input.episodeNumber == null ? null : Number(input.episodeNumber),
     sourceUrl: input.sourceUrl?.trim?.() ? String(input.sourceUrl).trim() : null,
     notes: input.notes ?? "",
-    lastVerifiedAt: input.lastVerifiedAt ? new Date(input.lastVerifiedAt) : null,
+    lastVerifiedAt: existing?.lastVerifiedAt ?? null,
     updatedBy: adminId,
     ...(existing ? {} : { createdBy: adminId }),
   };
 }
 
-function releaseDuplicateFilter(input: any, excludeId?: string) {
+function releaseDuplicateFilter(
+  input: ReturnType<typeof normalizeReleaseInput>,
+  excludeId?: string,
+) {
   const filter: Record<string, unknown> = {
     tmdbId: input.tmdbId,
     mediaType: input.mediaType,
@@ -2314,7 +2360,7 @@ function releaseDuplicateFilter(input: any, excludeId?: string) {
   return filter;
 }
 
-function mapReleaseEvent(doc: any, watchlistMatches = new Set<string>()) {
+function mapReleaseEvent(doc: ReleaseEventRecord, watchlistMatches = new Set<string>()) {
   const key = `${doc.mediaType}-${doc.tmdbId}`;
   return {
     id: doc._id.toString(),
@@ -2345,11 +2391,12 @@ function mapReleaseEvent(doc: any, watchlistMatches = new Set<string>()) {
     createdAt: doc.createdAt?.getTime?.() ?? Date.now(),
     updatedAt: doc.updatedAt?.getTime?.() ?? Date.now(),
     isWatchlisted: watchlistMatches.has(key),
+    matchScore: null as MatchScoreResult | null,
   };
 }
 
-function buildReleaseFilter(args: any, publicOnly = true) {
-  const filter: Record<string, any> = {};
+function buildReleaseFilter(args: ReleaseEventFilterInput, publicOnly = true) {
+  const filter: mongoose.FilterQuery<ReleaseEventRecord> = {};
   if (publicOnly) filter.publicationStatus = "PUBLISHED";
   else if (args.publicationStatus) filter.publicationStatus = args.publicationStatus;
   if (args.region) filter.region = String(args.region).toUpperCase();
