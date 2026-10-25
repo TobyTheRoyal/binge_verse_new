@@ -15,6 +15,8 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { MediaCard } from "@/components/MediaCard";
+import { RatingStars } from "@/components/RatingStars";
+import { formatRating } from "@/lib/format-rating";
 import { TMDB_IMG, posterUrl } from "@/lib/media-assets";
 import { MatchScore } from "@/components/MatchScore";
 import { useAuth } from "@/lib/auth-context";
@@ -40,75 +42,6 @@ function isAvailable(episode: EpisodeInfo) {
   if (!episode.air_date) return false;
   const airDate = new Date(episode.air_date).getTime();
   return Number.isFinite(airDate) && airDate <= Date.now();
-}
-
-function formatRating(rating: number) {
-  if (!rating) return "–";
-  return Number.isInteger(rating) ? String(rating) : rating.toFixed(1);
-}
-
-function RatingStars({
-  currentRating,
-  onRate,
-  ariaPrefix,
-  starClassName = "size-5",
-}: {
-  currentRating: number;
-  onRate?: (rating: number) => void;
-  ariaPrefix: string;
-  starClassName?: string;
-}) {
-  const [hover, setHover] = useState(0);
-  const displayRating = hover || currentRating;
-
-  return (
-    <div className="flex items-center gap-0.5" onMouseLeave={() => setHover(0)}>
-      {Array.from({ length: 10 }, (_, index) => {
-        const halfRating = index + 0.5;
-        const fullRating = index + 1;
-        const fill = Math.max(0, Math.min(1, displayRating - index)) * 100;
-
-        return (
-          <div key={fullRating} className={`relative shrink-0 ${starClassName}`}>
-            <Star
-              className={`absolute inset-0 ${starClassName} text-muted-foreground/35`}
-              aria-hidden="true"
-            />
-            <span
-              className="pointer-events-none absolute inset-0 overflow-hidden text-[var(--color-gold)]"
-              style={{ width: `${fill}%` }}
-              aria-hidden="true"
-            >
-              <Star className={`${starClassName} fill-[var(--color-gold)]`} />
-            </span>
-            {onRate && (
-              <>
-                <button
-                  type="button"
-                  onMouseEnter={() => setHover(halfRating)}
-                  onFocus={() => setHover(halfRating)}
-                  onClick={() => onRate(halfRating)}
-                  className="absolute inset-y-0 left-0 z-10 w-1/2 rounded-l-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                  aria-label={`${ariaPrefix}: ${halfRating} von 10 Sternen`}
-                />
-                <button
-                  type="button"
-                  onMouseEnter={() => setHover(fullRating)}
-                  onFocus={() => setHover(fullRating)}
-                  onClick={() => onRate(fullRating)}
-                  className="absolute inset-y-0 right-0 z-10 w-1/2 rounded-r-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                  aria-label={`${ariaPrefix}: ${fullRating} von 10 Sternen`}
-                />
-              </>
-            )}
-          </div>
-        );
-      })}
-      <span className="ml-3 min-w-[4ch] text-sm font-bold text-[var(--color-gold)]">
-        {formatRating(displayRating)}/10
-      </span>
-    </div>
-  );
 }
 
 function SeasonRatingCard({
@@ -202,7 +135,11 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
 
   if (isLoading) {
     return (
-      <div className="py-24 grid place-items-center text-muted-foreground">
+      <div
+        role="status"
+        aria-label="Titel wird geladen"
+        className="py-24 grid place-items-center text-muted-foreground"
+      >
         <Loader2 className="animate-spin" />
       </div>
     );
@@ -210,7 +147,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
 
   if (error || !d) {
     return (
-      <div className="py-24 text-center text-muted-foreground">
+      <div role="alert" className="py-24 text-center text-muted-foreground">
         Dieser Titel konnte nicht geladen werden.
       </div>
     );
@@ -393,6 +330,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                       )}
                     </div>
                     <select
+                      aria-label="Watch Status"
                       value={progress?.status ?? "PLAN_TO_WATCH"}
                       disabled={updating}
                       onChange={(event) =>
@@ -620,6 +558,7 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                   <button
                     key={season.seasonNumber}
                     type="button"
+                    aria-pressed={selectedSeason === season.seasonNumber}
                     onClick={() => setActiveSeason(season.seasonNumber)}
                     className={`shrink-0 h-10 px-4 rounded-full border text-sm font-semibold transition ${
                       selectedSeason === season.seasonNumber
@@ -741,6 +680,8 @@ export function DetailPage({ media, id }: { media: "movie" | "tv"; id: number })
                           </div>
                           <button
                             type="button"
+                            aria-label={`S${episode.season_number}E${episode.episode_number} ${episode.watched ? "als ungesehen markieren" : "als gesehen markieren"}`}
+                            aria-pressed={episode.watched}
                             disabled={!user || !available || updating}
                             onClick={() =>
                               setEpisodeWatched({

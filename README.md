@@ -22,6 +22,7 @@ Demo sessions expire after 24 hours by default; MongoDB TTL indexes subsequently
 - [Free deployment guide, in German](docs/deployment-free.md): publish the real full-stack application on Render Free with Atlas Free. No public URL has been provisioned by this repository.
 - [Architecture and engineering decisions](docs/architecture.md)
 - [Security review and remaining commercial-launch work](docs/security-review.md)
+- [Automated testing, browser matrix, coverage and debugging](docs/testing.md)
 - [Third-party data and asset notices](THIRD_PARTY_NOTICES.md)
 
 For a local demonstration without touching an existing database:
@@ -44,7 +45,7 @@ The isolated preview is available at `http://127.0.0.1:4100/demo`. It uses an ep
 
 ## Development
 
-Use a currently patched Node.js 22 LTS release, at least 22.15 (`nvm use` selects the local version for the 22 branch).
+Use a currently patched Node.js 22 LTS release, at least 22.22.2 (`nvm use` selects the local version for the 22 branch). The test DOM runtime requires this minimum.
 Install with `npm ci --legacy-peer-deps`, configure a local `.env` using the keys in `.env.example`, then run `npm run dev`.
 The frontend is served on port 8080 and proxies `/api` and `/graphql` to the API on port 4000.
 Existing credentials belong only in the environment or a secret manager.
@@ -54,13 +55,17 @@ npm run typecheck
 npm run check:api
 npm test
 npm run test:integration
+npm run test:components:coverage
+npx playwright install chromium firefox webkit
+npm run test:e2e
 npm run build
 npm run lint
 ```
 
 `npm test` uses isolated HTTP servers and mocked session persistence. It does not create accounts or delete data in the configured MongoDB database.
 `npm run test:integration` builds the application and starts its own local MongoDB test server. Alternatively, explicitly set `TEST_MONGODB_URI` for a disposable test instance. The regression tests create/remove their own random test database or temporary collection; they never use the application's normal ratings collection. The metadata server is stubbed locally, so integration tests need no real TMDB key.
-GitHub Actions runs API-type freshness, zero-warning lint, typecheck, production build, tests including real MongoDB regression flows, and a high-severity dependency audit. This workflow contains no application credentials.
+`npm run test:all` runs the complete quality pipeline. Playwright starts a separately built local application, disposable MongoDB and deterministic metadata fixtures; no real API keys or Atlas access are needed. It tests Chromium, Firefox, WebKit and two mobile profiles, with axe accessibility scans, targeted screenshot comparisons and API contract/failure checks. Vitest covers critical React components, auth transitions and search hooks with per-file coverage gates. See [the testing guide](docs/testing.md) for the exact coverage scope and remaining limits.
+GitHub Actions runs API-type freshness, zero-warning lint, typecheck, production build, backend coverage including real MongoDB regression flows, component coverage, the browser matrix and a high-severity dependency audit. Reports and failure traces are retained for seven days. This workflow contains no application credentials.
 The older root-level `test-*.mjs` scripts are manual probes, some of which create real database records. They are deliberately not part of the automated test command; use a disposable database for them.
 
 ## Code Organization

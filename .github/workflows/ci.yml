@@ -7,7 +7,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       mongo:
         image: mongo:8
@@ -30,9 +30,22 @@ jobs:
       - run: npm run check:api
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm run build
-      - run: npm test
+      - run: npm run test:server:coverage
         env:
           NODE_ENV: test
           TEST_MONGODB_URI: mongodb://127.0.0.1:27017
+      - run: npm run test:components:coverage
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run test:e2e:coverage
+      - run: npm run test:coverage:check
       - run: npm audit --audit-level=high
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: quality-reports
+          path: |
+            coverage/
+            !coverage/server/tmp/**
+            playwright-report/
+            test-results/
+          retention-days: 7

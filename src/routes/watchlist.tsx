@@ -142,6 +142,7 @@ export function WatchlistPage() {
                   </div>
                   <div className="mt-3 space-y-2">
                     <select
+                      aria-label={`Watch Status für ${it.title}`}
                       value={progress?.status ?? "PLAN_TO_WATCH"}
                       disabled={updating}
                       onChange={(event) =>
@@ -182,7 +183,9 @@ export function WatchlistPage() {
                 </div>
                 <button
                   onClick={() => remove(it.id, it.media_type)}
-                  className="self-start size-9 grid place-items-center rounded-full hover:bg-destructive/10 hover:text-destructive transition opacity-0 group-hover:opacity-100"
+                  aria-label={`${it.title} aus Watchlist entfernen`}
+                  title="Aus Watchlist entfernen"
+                  className="self-start size-9 grid place-items-center rounded-full hover:bg-destructive/10 hover:text-destructive transition opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
                 >
                   <Trash2 className="size-4" />
                 </button>

@@ -46,9 +46,11 @@ All demo personal documents receive `demoExpiresAt`. The same expiry propagates 
 
 ## Verification
 
-`npm run lint` permits no warnings; typechecking includes frontend, backend, shared definitions and maintenance scripts. Unit/HTTP tests cover sessions, permissions, request limits, configuration, demo expiry and metadata boundaries. The database regression suite starts a real temporary MongoDB server, stubs metadata locally and verifies two separate demo visitors, saved half-star season ratings, series aggregation, next episode, logout revocation and denied cross-user/admin access.
+`npm run test:all` checks API-type freshness, zero-warning lint, types, a production-equivalent test build, backend tests, React component/hook tests and the Playwright browser/API matrix. The database regression suite starts a real temporary MongoDB server and uses local metadata fixtures; it never needs Atlas or real service credentials.
 
-Browser screenshots document the actual desktop/mobile demo. Browser QA supplements the API tests; the repository does not pretend that screenshots are a complete automated browser regression suite or a performance/load-test report.
+The same browser workflows run in Chromium, Firefox, WebKit and two mobile profiles. They cover authentication and visitor isolation, search, ratings, episode progress, discovery and calendar administration. axe scans, targeted screenshot baselines, failure injection and API contract checks supplement the workflow assertions. Backend execution from integration and browser tests is merged through source maps; targeted component coverage has separate per-file gates. CI retains diagnostic artifacts and rejects flaky retries.
+
+See [the testing guide](testing.md) for the precise scope, commands and limitations. Automated scans, emulated devices and a small local API smoke test are not a production accessibility, security or capacity guarantee.
 
 ## Portfolio Versus Commercial Launch
 

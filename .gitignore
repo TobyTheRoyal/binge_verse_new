@@ -11,6 +11,10 @@ node_modules
 dist
 dist-server
 dist-ssr
+coverage/
+playwright-report/
+test-results/
+.nyc_output/
 *.local
 .env
 src/.env

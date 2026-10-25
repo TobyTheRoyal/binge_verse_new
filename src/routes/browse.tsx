@@ -327,7 +327,18 @@ export function BrowsePage() {
         </form>
       </div>
 
-      {resultsQ.isLoading ? (
+      {resultsQ.isError ? (
+        <div role="alert" className="py-20 text-center text-muted-foreground">
+          <p>Die Titel konnten nicht geladen werden.</p>
+          <button
+            type="button"
+            onClick={() => void resultsQ.refetch()}
+            className="mt-4 rounded-md border border-border px-4 py-2 font-semibold hover:text-foreground"
+          >
+            Erneut versuchen
+          </button>
+        </div>
+      ) : resultsQ.isLoading ? (
         <div className="py-20 grid place-items-center text-muted-foreground">
           <Loader2 className="animate-spin" />
         </div>

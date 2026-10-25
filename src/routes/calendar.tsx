@@ -385,6 +385,14 @@ export function CalendarPage() {
               </div>
             ))}
             {calendarCells.map((day, index) => {
+              if (!day)
+                return (
+                  <div
+                    key={`blank-${index}`}
+                    aria-hidden="true"
+                    className="min-h-24 border-b border-r border-border"
+                  />
+                );
               const key = day
                 ? `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`
                 : "";

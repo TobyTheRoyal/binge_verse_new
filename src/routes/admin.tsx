@@ -228,7 +228,7 @@ export function AdminPage() {
           </nav>
         </aside>
 
-        <main className="space-y-8">
+        <div className="min-w-0 space-y-8">
           <section id="overview" className="grid gap-3 sm:grid-cols-4">
             {statCards.map(([label, value]) => (
               <div key={label} className="rounded-lg border border-border bg-surface p-4">
@@ -275,6 +275,7 @@ export function AdminPage() {
                 <div className="relative mt-2">
                   <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                   <input
+                    aria-label="Release-Titel suchen"
                     value={query}
                     onChange={(event) => {
                       setQuery(event.target.value);
@@ -332,6 +333,7 @@ export function AdminPage() {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <select
+                  aria-label="Release-Anbieter"
                   value={draft.provider}
                   onChange={(event) =>
                     setDraft({
@@ -350,6 +352,7 @@ export function AdminPage() {
                   ))}
                 </select>
                 <select
+                  aria-label="Release-Region"
                   value={draft.region}
                   onChange={(event) => setDraft({ ...draft, region: event.target.value })}
                   className="h-10 rounded-md border border-border bg-background px-3 text-sm"
@@ -359,6 +362,7 @@ export function AdminPage() {
                   ))}
                 </select>
                 <select
+                  aria-label="Release-Art"
                   value={draft.releaseType}
                   onChange={(event) =>
                     setDraft({ ...draft, releaseType: event.target.value as ReleaseType })
@@ -372,6 +376,7 @@ export function AdminPage() {
                   ))}
                 </select>
                 <select
+                  aria-label="Release-Bestätigung"
                   value={draft.confirmationStatus}
                   onChange={(event) =>
                     setDraft({
@@ -386,6 +391,7 @@ export function AdminPage() {
                   ))}
                 </select>
                 <select
+                  aria-label="Release-Datumsgenauigkeit"
                   value={draft.datePrecision}
                   onChange={(event) =>
                     setDraft({ ...draft, datePrecision: event.target.value as DatePrecision })
@@ -397,6 +403,7 @@ export function AdminPage() {
                   ))}
                 </select>
                 <input
+                  aria-label="Release-Datum"
                   type="date"
                   value={draft.releaseDate}
                   onChange={(event) => setDraft({ ...draft, releaseDate: event.target.value })}
@@ -695,7 +702,7 @@ export function AdminPage() {
               )}
             </div>
           </section>
-        </main>
+        </div>
       </div>
     </div>
   );

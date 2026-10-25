@@ -1,5 +1,15 @@
 # Security and Scalability Review
 
+## Automated Verification Update (2026-10-25)
+
+The current repository adds Vitest/Testing Library component regressions and a Playwright suite across Chromium, Firefox, WebKit and two mobile profiles. The browser suite uses the real built application, temporary MongoDB, normal authentication and deterministic local metadata, not mocked application responses for successful flows. It does not modify the public demo or configured user database.
+
+Automated checks now include first-click autocomplete, independent season ratings, episode/season progress and refresh persistence, independent demo visitors, denied foreign-user/admin access, registration/login/logout, Austrian filters, infinite loading and admin-to-public-calendar publication. axe scans, two visual references, failure injection, uncaught browser-error assertions and a small local API concurrency smoke test provide additional regression signals. Search focus handling, mobile admin sizing, accessible calendar placeholders and recoverable Browse errors were corrected after test failures.
+
+The GitHub Actions pipeline runs the checks with coverage gates and retains reports/traces. A retry does not conceal a flaky browser test. See [Automated Quality Checks](testing.md) for reproducible commands, coverage scope and remaining gaps. CI execution after pushing and production Redis/TLS behavior still need verification in their actual environments. No claim of complete security or commercial-scale capacity follows from a green local suite.
+
+The sections below describe earlier implementation/audit snapshots; their test counts and older lint findings are historical.
+
 ## Portfolio Readiness Update (2026-10-25)
 
 The older audit below is retained as history. The explicit-`any` debt and Fast Refresh warnings identified there are now resolved: the repository has zero-warning lint, schema-generated GraphQL/resolver contracts and typed TMDB transport objects. Shared hooks/context and UI variants have separate modules. Registration validation loads only when required instead of adding its library to every page.

@@ -29,6 +29,8 @@ export function Navbar() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchResultsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setMenuOpen(false);
     setSearchOpen(false);
@@ -57,6 +59,7 @@ export function Navbar() {
       className="sticky top-0 z-40 glass border-b border-border"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
+          if (searchOpen) searchInputRef.current?.focus();
           setSearchOpen(false);
           if (menuOpen) {
             setMenuOpen(false);
@@ -89,21 +92,43 @@ export function Navbar() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
             <input
+              ref={searchInputRef}
               value={q}
               onChange={(e) => {
                 setQ(e.target.value);
                 setSearchOpen(true);
               }}
               onFocus={() => setSearchOpen(true)}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                const buttons = searchResultsRef.current?.querySelectorAll("button");
+                if (!buttons?.length) return;
+                event.preventDefault();
+                buttons[event.key === "ArrowDown" ? 0 : buttons.length - 1].focus();
+              }}
               aria-label="Filme und Serien suchen"
-              aria-expanded={searchOpen && suggestions.length > 0}
-              aria-controls="header-search-results"
+              aria-controls={
+                searchOpen && suggestions.length > 0 ? "header-search-results" : undefined
+              }
               placeholder="Suche Filme, Serien…"
               className="h-10 w-full rounded-md border border-input bg-surface/70 pl-10 pr-3 text-sm transition-colors placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-ring"
             />
             {searchOpen && suggestions.length > 0 && (
               <div
                 id="header-search-results"
+                ref={searchResultsRef}
+                role="region"
+                aria-label="Suchvorschläge"
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                  const buttons = Array.from(event.currentTarget.querySelectorAll("button"));
+                  const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                  event.preventDefault();
+                  buttons[
+                    (current + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) %
+                      buttons.length
+                  ]?.focus();
+                }}
                 className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-lg border border-input bg-popover shadow-2xl"
               >
                 {suggestions.map((item) => {
@@ -113,6 +138,10 @@ export function Navbar() {
                     <button
                       key={`${item.media_type}-${item.id}`}
                       type="button"
+                      onMouseDown={(event) => {
+                        // Keep the input focused until click; Safari may otherwise remove the list.
+                        if (event.button === 0) event.preventDefault();
+                      }}
                       onClick={() => {
                         setQ("");
                         setSearchOpen(false);
@@ -122,11 +151,7 @@ export function Navbar() {
                     >
                       <div className="h-14 w-10 overflow-hidden rounded-md border border-border bg-surface/60 shrink-0">
                         {poster ? (
-                          <img
-                            src={poster}
-                            alt={item.title}
-                            className="h-full w-full object-cover"
-                          />
+                          <img src={poster} alt="" className="h-full w-full object-cover" />
                         ) : (
                           <div className="grid h-full w-full place-items-center text-[9px] text-muted-foreground">
                             IMG

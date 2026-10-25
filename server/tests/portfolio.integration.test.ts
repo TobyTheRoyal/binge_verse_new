@@ -74,6 +74,7 @@ test(
         DEMO_ENABLED: "true",
         REGISTRATION_ENABLED: "false",
         SERVE_WEB: "true",
+        RUN_MIGRATIONS: "true",
         TMDB_API_KEY: "test-only",
         OMDB_API_KEY: "",
         TMDB_API_ORIGIN: `http://127.0.0.1:${metadataPort}`,
